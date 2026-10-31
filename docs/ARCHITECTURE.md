@@ -1,4 +1,4 @@
-# x402 Guardian — Architecture Specification (Phase 1)
+# x402 Guardian — Architecture Specification (Phase 2)
 
 ## 1. System Overview
 
@@ -9,8 +9,8 @@ In modern AI agent ecosystems, language models generate purchase suggestions, in
 ```mermaid
 flowchart TD
     subgraph ClientLayer ["Client & Untrusted Agents"]
-        UI["Next.js Web UI\n(Safe Content Rendering)"]
-        Agent["AI Purchasing Agent\n(Untrusted LLM Output)"]
+        UI["Next.js Web UI\n(Safe Content Rendering & Compact Approval Card)"]
+        Agent["AI Purchasing Assistant\n(DeterministicDemoAdapter & Untrusted LLM Output)"]
     end
 
     subgraph APIGateway ["Fastify API Gateway"]
@@ -22,9 +22,9 @@ flowchart TD
 
     subgraph CoreModules ["Modular Backend Services"]
         HealthMod["Health & Readiness Check\n(/live, /ready)"]
-        CatalogMod["Authoritative Catalog\n(Seeded Products & Merchants)"]
-        ConvMod["Conversations & Messages\n(User Isolated)"]
-        PurchaseMod["Purchase Intents\n(Catalog Price Binding)"]
+        CatalogMod["Authoritative Catalog & Payment Options\n(Seeded Products, Options & Merchants)"]
+        ConvMod["Conversations & Assistant Replies\n(User Isolated, Prompt-Injection Defended)"]
+        PurchaseMod["Purchase Intents & Approval Lifecycle\n(FOR UPDATE Locks, Optimistic Versioning)"]
         AuditMod["Append-Only Audit Ledger"]
     end
 
@@ -35,11 +35,11 @@ flowchart TD
         Settlement["ISettlementAdapter\n(Simulation Only)"]
     end
 
-    subgraph DatabaseLayer ["PostgreSQL Database (Helium)"]
+    subgraph DatabaseLayer ["PostgreSQL Database"]
         ProfilesTbl[("profiles")]
         ConvTbl[("conversations & messages")]
-        CatalogTbl[("merchants & products")]
-        IntentsTbl[("purchase_intents")]
+        CatalogTbl[("merchants, products & product_payment_options")]
+        IntentsTbl[("purchase_intents (versioned)")]
         SnapshotsTbl[("approval_snapshots (Immutable)")]
         DecisionsTbl[("guardian_decisions")]
         AuditTbl[("audit_events (Append-Only)")]
@@ -173,3 +173,33 @@ Phase 1 provides strict TypeScript interfaces for integration modules:
 - [`ISettlementAdapter`](file:///home/runner/workspace/packages/shared/src/types/integration.ts#L37)
 
 Simulation implementations ([`SimulationPaymentSigner`](file:///home/runner/workspace/apps/api/src/modules/integrations/mockSigner.ts#L11) and [`SimulationSettlementAdapter`](file:///home/runner/workspace/apps/api/src/modules/integrations/settlementAdapter.ts#L8)) reject instantiation if `APP_ENV === 'production'`.
+
+---
+
+## 8. Phase 2 Purchasing & Approval Lifecycle
+
+In Phase 2, x402 Guardian introduces the interactive purchasing assistant and authoritative approval flow.
+
+### State Transitions
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: User selects product / intent created (v1)
+    Draft --> Draft: Payment option switched (version++, prior snapshots superseded)
+    Draft --> Approved: Explicit user approval (snapshot created, terms locked)
+    Approved --> Draft: Payment option switched (version++, snapshot superseded)
+    Draft --> Rejected: Explicit user rejection with recorded reason
+    Approved --> Rejected: Explicit user rejection with recorded reason
+    Rejected --> [*]: Terminal state (no further approvals allowed)
+    Approved --> [*]: Authorization complete (payment execution withheld until Phase 3)
+```
+
+### Concurrency & Locking Architecture
+To guarantee that payments cannot be approved against stale prices, modified options, or through concurrent duplicate clicks:
+1. **Pessimistic Row Locking**: When `POST /api/v1/purchases/intents/:id/approve` is called, the transaction locks the intent record with:
+   ```sql
+   SELECT * FROM purchase_intents WHERE id = :id FOR UPDATE;
+   ```
+2. **Optimistic Version Verification**: The request must supply `expectedVersion`. If `intent.version !== expectedVersion`, the server aborts the transaction with `VERSION_CONFLICT` (HTTP 409).
+3. **Idempotency Support**: Repeated requests with the same `idempotencyKey` or repeated clicks on an already approved intent return the existing immutable snapshot safely without duplicate insertion.
+4. **Approval Supersession**: If a user switches payment options on an intent that was previously approved, the backend marks existing approval snapshots for that intent as superseded (`isSuperseded = true`), increments `version`, and transitions status back to `'draft'`.
+5. **Exact Approved Notice**: Approval terminates strictly with the notice `"Purchase approved — payment has not been executed."` No wallet private keys or settlement calls are invoked.

@@ -112,6 +112,36 @@ export const products = pgTable(
   ]
 );
 
+// 5b. Product Payment Options (Backend-authoritative asset/network options for products)
+export const productPaymentOptions = pgTable(
+  'product_payment_options',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references(() => merchants.id, { onDelete: 'cascade' }),
+    networkIdentifier: text('network_identifier').notNull(), // e.g. 'eip155:84532', 'eip155:8453', 'solana:devnet'
+    assetIdentifier: text('asset_identifier').notNull(), // e.g. 'USDC'
+    currency: text('currency').notNull().default('USDC'),
+    amount: numeric('amount', { precision: 78, scale: 0 }).notNull(), // Integer string in base units
+    decimals: integer('decimals').notNull().default(6),
+    trustedRecipientAddress: text('trusted_recipient_address').notNull(),
+    productVersion: integer('product_version').notNull().default(1),
+    isDefault: boolean('is_default').notNull().default(false),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('product_payment_options_product_id_idx').on(table.productId),
+    index('product_payment_options_merchant_id_idx').on(table.merchantId),
+    index('product_payment_options_is_active_idx').on(table.isActive),
+  ]
+);
+
 // 6. Purchase Intents
 export const purchaseIntents = pgTable(
   'purchase_intents',
@@ -129,11 +159,19 @@ export const purchaseIntents = pgTable(
     merchantId: uuid('merchant_id')
       .notNull()
       .references(() => merchants.id),
+    selectedPaymentOptionId: uuid('selected_payment_option_id').references(
+      () => productPaymentOptions.id,
+      { onDelete: 'set null' }
+    ),
     proposedAmount: numeric('proposed_amount', { precision: 78, scale: 0 }).notNull(),
     currency: text('currency').notNull(),
     assetIdentifier: text('asset_identifier').notNull(),
     networkIdentifier: text('network_identifier').notNull(),
+    version: integer('version').notNull().default(1),
     status: text('status').notNull().default('draft'), // 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'superseded' | 'expired'
+    rejectionReason: text('rejection_reason'),
+    idempotencyKey: text('idempotency_key'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -142,6 +180,7 @@ export const purchaseIntents = pgTable(
     index('purchase_intents_product_id_idx').on(table.productId),
     index('purchase_intents_status_idx').on(table.status),
     index('purchase_intents_created_at_idx').on(table.createdAt),
+    index('purchase_intents_idempotency_idx').on(table.idempotencyKey),
   ]
 );
 
@@ -162,6 +201,9 @@ export const approvalSnapshots = pgTable(
     merchantId: uuid('merchant_id')
       .notNull()
       .references(() => merchants.id),
+    paymentOptionId: uuid('payment_option_id').references(() => productPaymentOptions.id, {
+      onDelete: 'set null',
+    }),
     trustedRecipientAddress: text('trusted_recipient_address').notNull(),
     exactAmount: numeric('exact_amount', { precision: 78, scale: 0 }).notNull(),
     assetIdentifier: text('asset_identifier').notNull(),
@@ -305,13 +347,28 @@ export const messagesRelations = relations(messages, ({ one }) => ({
 
 export const merchantsRelations = relations(merchants, ({ many }) => ({
   products: many(products),
+  paymentOptions: many(productPaymentOptions),
 }));
 
-export const productsRelations = relations(products, ({ one }) => ({
+export const productsRelations = relations(products, ({ one, many }) => ({
   merchant: one(merchants, {
     fields: [products.merchantId],
     references: [merchants.id],
   }),
+  paymentOptions: many(productPaymentOptions),
+}));
+
+export const productPaymentOptionsRelations = relations(productPaymentOptions, ({ one, many }) => ({
+  product: one(products, {
+    fields: [productPaymentOptions.productId],
+    references: [products.id],
+  }),
+  merchant: one(merchants, {
+    fields: [productPaymentOptions.merchantId],
+    references: [merchants.id],
+  }),
+  purchaseIntents: many(purchaseIntents),
+  approvalSnapshots: many(approvalSnapshots),
 }));
 
 export const purchaseIntentsRelations = relations(purchaseIntents, ({ one, many }) => ({
@@ -326,6 +383,10 @@ export const purchaseIntentsRelations = relations(purchaseIntents, ({ one, many 
   merchant: one(merchants, {
     fields: [purchaseIntents.merchantId],
     references: [merchants.id],
+  }),
+  selectedPaymentOption: one(productPaymentOptions, {
+    fields: [purchaseIntents.selectedPaymentOptionId],
+    references: [productPaymentOptions.id],
   }),
   approvalSnapshots: many(approvalSnapshots),
   guardianDecisions: many(guardianDecisions),
@@ -348,6 +409,10 @@ export const approvalSnapshotsRelations = relations(approvalSnapshots, ({ one, m
   merchant: one(merchants, {
     fields: [approvalSnapshots.merchantId],
     references: [merchants.id],
+  }),
+  paymentOption: one(productPaymentOptions, {
+    fields: [approvalSnapshots.paymentOptionId],
+    references: [productPaymentOptions.id],
   }),
   paymentAttempts: many(paymentAttempts),
 }));

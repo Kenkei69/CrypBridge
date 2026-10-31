@@ -16,23 +16,33 @@ export async function runMigrations(connectionString?: string): Promise<void> {
   const sql = postgres(url, { max: 1 });
 
   try {
-    const possiblePaths = [
-      path.resolve(__dirname, 'migrations', '0001_initial_schema.sql'),
-      path.resolve(__dirname, '..', 'src', 'migrations', '0001_initial_schema.sql'),
-      path.resolve(process.cwd(), 'packages', 'database', 'src', 'migrations', '0001_initial_schema.sql'),
+    const possibleDirs = [
+      path.resolve(__dirname, 'migrations'),
+      path.resolve(__dirname, '..', 'src', 'migrations'),
+      path.resolve(process.cwd(), 'packages', 'database', 'src', 'migrations'),
     ];
 
-    const migrationFilePath = possiblePaths.find((p) => fs.existsSync(p));
-    if (!migrationFilePath) {
-      throw new Error(`Migration file not found in: ${possiblePaths.join(', ')}`);
+    const migrationDir = possibleDirs.find((dir) => fs.existsSync(dir));
+    if (!migrationDir) {
+      throw new Error(`Migration directory not found in: ${possibleDirs.join(', ')}`);
     }
 
-    console.log(`[migrate] Executing migration: ${path.basename(migrationFilePath)}`);
-    const sqlContent = fs.readFileSync(migrationFilePath, 'utf-8');
+    const files = fs
+      .readdirSync(migrationDir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
 
-    // Run the migration script
-    await sql.unsafe(sqlContent);
-    console.log('[migrate] Migration applied successfully.');
+    console.log(`[migrate] Found ${files.length} migration file(s) in ${migrationDir}: ${files.join(', ')}`);
+
+    for (const file of files) {
+      const fullPath = path.join(migrationDir, file);
+      console.log(`[migrate] Executing migration: ${file}`);
+      const sqlContent = fs.readFileSync(fullPath, 'utf-8');
+      await sql.unsafe(sqlContent);
+      console.log(`[migrate] Migration ${file} applied successfully.`);
+    }
+
+    console.log('[migrate] All migrations applied successfully.');
   } finally {
     await sql.end();
   }

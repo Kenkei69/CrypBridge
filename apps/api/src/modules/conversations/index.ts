@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, and, desc, asc } from 'drizzle-orm';
-import { conversations, messages, profiles } from '@x402/database/schema';
+import { conversations, messages, profiles, products, merchants, productPaymentOptions } from '@x402/database/schema';
 import {
   AppError,
   CreateConversationSchema,
@@ -8,6 +8,7 @@ import {
   UuidSchema,
 } from '@x402/shared';
 import { recordAuditEvent } from '../audit/auditService.js';
+import { assistantAdapter } from '../purchasing-assistant/assistantService.js';
 
 export async function conversationRoutes(app: FastifyInstance): Promise<void> {
   // Ensure user profile exists before conversation operations
@@ -198,6 +199,127 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
         messages: msgList,
         total: msgList.length,
       };
+    }
+  );
+
+  // POST /api/v1/conversations/:id/assistant-reply - Generate catalog-grounded assistant reply
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/conversations/:id/assistant-reply',
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const convId = UuidSchema.parse(request.params.id);
+      const userId = request.user.id;
+
+      // Verify conversation ownership
+      const [conv] = await app.db
+        .select()
+        .from(conversations)
+        .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
+        .limit(1);
+
+      if (!conv) {
+        throw AppError.notFound('Conversation');
+      }
+
+      // Fetch message history for context
+      const history = await app.db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.conversationId, convId), eq(messages.userId, userId)))
+        .orderBy(asc(messages.createdAt));
+
+      const lastUserMsg = [...history].reverse().find((m) => m.role === 'user');
+      if (!lastUserMsg) {
+        throw AppError.badRequest('No user message found to respond to');
+      }
+
+      // Fetch active catalog products with payment options
+      const rawProducts = await app.db
+        .select({
+          id: products.id,
+          merchantId: products.merchantId,
+          name: products.name,
+          description: products.description,
+          priceAmount: products.priceAmount,
+          currency: products.currency,
+          assetIdentifier: products.assetIdentifier,
+          networkIdentifier: products.networkIdentifier,
+          isActive: products.isActive,
+          createdAt: products.createdAt,
+          updatedAt: products.updatedAt,
+          merchant: {
+            id: merchants.id,
+            name: merchants.name,
+            slug: merchants.slug,
+            trustedRecipientAddress: merchants.trustedRecipientAddress,
+            paymentNetwork: merchants.paymentNetwork,
+            isTrusted: merchants.isTrusted,
+          },
+        })
+        .from(products)
+        .innerJoin(merchants, eq(products.merchantId, merchants.id))
+        .where(eq(products.isActive, true));
+
+      const allOptions = await app.db
+        .select()
+        .from(productPaymentOptions)
+        .where(eq(productPaymentOptions.isActive, true));
+
+      const optionsByProduct = new Map<string, any[]>();
+      for (const opt of allOptions) {
+        const list = optionsByProduct.get(opt.productId) || [];
+        list.push(opt);
+        optionsByProduct.set(opt.productId, list);
+      }
+
+      const catalogWithPaymentOptions = rawProducts.map((p: any) => ({
+        ...p,
+        createdAt: p.createdAt.toISOString(),
+        updatedAt: p.updatedAt.toISOString(),
+        merchant: {
+          ...p.merchant,
+          createdAt: '',
+          updatedAt: '',
+        },
+        paymentOptions: optionsByProduct.get(p.id) || [],
+      }));
+
+      // Process assistant response
+      const assistantRes = await assistantAdapter.process({
+        conversationId: convId,
+        userId,
+        userMessage: lastUserMsg.content,
+        conversationHistory: history.map((h) => ({
+          role: h.role as any,
+          content: h.content,
+          metadata: h.metadata,
+        })),
+        catalogProducts: catalogWithPaymentOptions,
+      });
+
+      // Persist assistant message
+      const [assistantMsg] = await app.db
+        .insert(messages)
+        .values({
+          conversationId: convId,
+          userId,
+          role: 'assistant',
+          content: assistantRes.content,
+          metadata: {
+            adapterType: assistantRes.adapterType,
+            suggestedAction: assistantRes.suggestedAction,
+            suggestedProductIds: assistantRes.suggestedProducts?.map((p) => p.id) || [],
+            selectedProductId: assistantRes.selectedProductId || null,
+          },
+        })
+        .returning();
+
+      return reply.status(201).send({
+        message: assistantMsg,
+        suggestedProducts: assistantRes.suggestedProducts || [],
+        selectedProductId: assistantRes.selectedProductId || null,
+        adapterType: assistantRes.adapterType,
+      });
     }
   );
 }

@@ -9,6 +9,23 @@ export interface Merchant {
   updatedAt: string;
 }
 
+export interface PaymentOption {
+  id: string;
+  productId: string;
+  merchantId: string;
+  networkIdentifier: string;
+  assetIdentifier: string;
+  currency: string;
+  amount: string; // Base units integer string, e.g. "5000000"
+  decimals: number;
+  trustedRecipientAddress: string;
+  productVersion: number;
+  isDefault: boolean;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Product {
   id: string;
   merchantId: string;
@@ -20,6 +37,7 @@ export interface Product {
   networkIdentifier: string;
   isActive: boolean;
   merchant?: Merchant;
+  paymentOptions?: PaymentOption[];
   createdAt: string;
   updatedAt: string;
 }

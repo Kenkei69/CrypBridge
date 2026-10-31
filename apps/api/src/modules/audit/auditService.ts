@@ -1,9 +1,8 @@
-import type { DatabaseInstance } from '@x402/database';
 import { auditEvents } from '@x402/database/schema';
 import type { CreateAuditEventDto } from '@x402/shared';
 
 export async function recordAuditEvent(
-  db: DatabaseInstance['db'],
+  db: any,
   event: CreateAuditEventDto
 ): Promise<void> {
   try {

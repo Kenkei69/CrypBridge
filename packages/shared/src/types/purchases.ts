@@ -1,3 +1,5 @@
+import type { PaymentOption } from './catalog.js';
+
 export type PurchaseIntentStatus =
   | 'draft'
   | 'pending_approval'
@@ -14,11 +16,16 @@ export interface PurchaseIntent {
   conversationId: string | null;
   productId: string;
   merchantId: string;
+  selectedPaymentOptionId?: string | null;
   proposedAmount: string; // Base-units integer string, e.g. "5000000"
   currency: string;
   assetIdentifier: string;
   networkIdentifier: string;
+  version: number;
   status: PurchaseIntentStatus;
+  rejectionReason?: string | null;
+  idempotencyKey?: string | null;
+  expiresAt?: string | null;
   product?: {
     id: string;
     name: string;
@@ -29,6 +36,7 @@ export interface PurchaseIntent {
     name: string;
     trustedRecipientAddress: string;
   };
+  selectedPaymentOption?: PaymentOption | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +55,7 @@ export interface ApprovalSnapshot {
   purchaseIntentId: string;
   productId: string;
   merchantId: string;
+  paymentOptionId?: string | null;
   trustedRecipientAddress: string;
   exactAmount: string; // Base units integer string
   assetIdentifier: string;
@@ -58,4 +67,41 @@ export interface ApprovalSnapshot {
   approvedAt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ApprovalPreview {
+  intentId: string;
+  version: number;
+  productId: string;
+  productName: string;
+  productDescription: string;
+  merchantId: string;
+  merchantName: string;
+  trustedRecipientAddress: string;
+  amount: string; // Base-units integer string
+  displayAmount: string; // Human-readable e.g. "$5.00"
+  assetIdentifier: string;
+  currency: string;
+  networkIdentifier: string;
+  paymentOptionId: string;
+  availablePaymentOptions: PaymentOption[];
+  expiresAt: string;
+  status: PurchaseIntentStatus;
+  isExpired: boolean;
+  canApprove: boolean;
+  activeApprovalSnapshot?: ApprovalSnapshot | null;
+  simulatedNotice: string;
+}
+
+export interface ApprovePurchaseIntentDto {
+  expectedVersion: number;
+  idempotencyKey?: string;
+}
+
+export interface SelectPaymentOptionDto {
+  paymentOptionId: string;
+}
+
+export interface RejectPurchaseIntentDto {
+  reason?: string;
 }

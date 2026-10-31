@@ -8,7 +8,7 @@ export async function apiFetch<T>(endpoint: string, options: ApiFetchOptions = {
   const { token, headers: customHeaders, ...rest } = options;
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(rest.body ? { 'Content-Type': 'application/json' } : {}),
     ...(customHeaders as Record<string, string>),
   };
 

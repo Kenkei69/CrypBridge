@@ -23,8 +23,29 @@ export const CreateMessageSchema = z.object({
 export const CreateDraftPurchaseIntentSchema = z.object({
   productId: UuidSchema,
   conversationId: UuidSchema.optional(),
+  paymentOptionId: UuidSchema.optional(),
   // Note: Client MUST NOT supply price, merchant, recipient, asset, or network.
   // These are derived authoritatively from the backend catalog.
+});
+
+export const SelectPaymentOptionSchema = z.object({
+  paymentOptionId: UuidSchema,
+});
+
+export const ApprovePurchaseIntentSchema = z.object({
+  expectedVersion: z.number().int().positive('Expected version must be a positive integer'),
+  idempotencyKey: z.string().trim().min(1).max(128).optional(),
+});
+
+export const RejectPurchaseIntentSchema = z.object({
+  reason: z.string().trim().max(500, 'Rejection reason cannot exceed 500 characters').optional(),
+});
+
+export const CatalogSearchQuerySchema = z.object({
+  query: z.string().trim().max(200).optional(),
+  maxPrice: z.string().trim().optional(),
+  network: z.string().trim().optional(),
+  category: z.string().trim().optional(),
 });
 
 export const UpdatePurchaseIntentStatusSchema = z.object({

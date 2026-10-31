@@ -3,6 +3,8 @@
 import React from 'react';
 import { ShoppingBag, CheckCircle, ExternalLink, Shield } from 'lucide-react';
 
+import type { PaymentOption } from '@x402/shared';
+
 export interface ProductItem {
   id: string;
   name: string;
@@ -18,6 +20,7 @@ export interface ProductItem {
     trustedRecipientAddress: string;
     isTrusted: boolean;
   };
+  paymentOptions?: PaymentOption[];
 }
 
 interface CatalogBrowserProps {
