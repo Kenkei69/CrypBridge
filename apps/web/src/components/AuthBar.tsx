@@ -31,9 +31,9 @@ export function AuthBar({ user, token, onLogin, onLogout, loading }: AuthBarProp
         <label className="sr-only" htmlFor="login-email">Email</label>
         <input id="login-email" type="email" required value={email} disabled={sent} onChange={event => setEmail(event.target.value)} placeholder="Invited email address" className="bg-gray-900 border border-gray-700 rounded px-3 py-2" />
         {sent && <><label className="sr-only" htmlFor="login-code">Email code</label><input id="login-code" required autoComplete="one-time-code" value={code} onChange={event => setCode(event.target.value)} placeholder="Code from email" className="bg-gray-900 border border-gray-700 rounded px-3 py-2" /></>}
-        <button disabled={busy || loading} className="bg-blue-600 rounded px-4 py-2 disabled:opacity-50">{busy || loading ? 'Please wait…' : sent ? 'Verify code' : 'Send sign-in code'}</button>
+        <button disabled={busy || loading} className="bg-blue-600 rounded px-4 py-2 disabled:opacity-50">{busy || loading ? 'Please wait…' : sent ? 'Verify code' : 'Send sign-in link'}</button>
         {sent && <button type="button" onClick={() => {setSent(false);setCode('');}}>Change email</button>}
-        {sent && <p role="status" className="text-xs text-gray-300 w-full">Check your email for a sign-in code.</p>}
+        {sent && <p role="status" className="text-xs text-gray-300 w-full">Open the sign-in link in your email in this browser. If your email contains a code, enter it here.</p>}
         {error && <p role="alert" className="text-red-300 w-full">{error}</p>}
       </form>}
     </div>

@@ -4,7 +4,7 @@ This deployment demonstrates simulated payments only. No wallet, private key, re
 
 ## 1. Supabase
 
-Create a project. Under Auth signing keys, use an asymmetric ES256 or RS256 key (legacy HS256 production sessions are deliberately rejected). Enable email authentication. Configure an SMTP provider suitable for your invited users. In the Magic Link email template include `{{ .Token }}` to deliver the OTP code. Create/invite test users in the dashboard; the app sends OTP with `create_user: false`, so it cannot register arbitrary visitors. Disable public signups for this private demo. Set your frontend URL as the site URL.
+Create a project. Under Auth signing keys, use an asymmetric ES256 or RS256 key (legacy HS256 production sessions are deliberately rejected). Enable email authentication. The default email template sends a magic link, which the app accepts and verifies through the API. Optional custom SMTP can send `{{ .Token }}` codes, which the form also supports. Default Supabase email delivery is restricted; configure your own SMTP before inviting external users. Create/invite test users in the dashboard; the app sends OTP with `create_user: false`, so it cannot register arbitrary visitors. Disable public signups for this private demo. Set your frontend URL as the site URL.
 
 Obtain the project URL, public anon/publishable key, and PostgreSQL connection string. Never place a service-role key or database password in NEXT_PUBLIC variables.
 

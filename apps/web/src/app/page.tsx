@@ -93,6 +93,23 @@ export default function Home() {
     let cancelled = false;
     const restore = async () => {
       try {
+        const params = new URLSearchParams(window.location.hash.slice(1));
+        const accessToken = params.get('access_token');
+        const refreshToken = params.get('refresh_token');
+        if (accessToken || refreshToken || params.has('error')) {
+          // Remove bearer credentials from the address bar before making requests.
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+        if (accessToken && refreshToken) {
+          // A redirect token gains no authority until the API verifies its signature and claims.
+          const profile = await apiFetch<{ user: UserProfile }>('/api/v1/auth/me', { token: accessToken });
+          if (!cancelled) {
+            localStorage.setItem('x402_refresh_token', refreshToken);
+            setToken(accessToken); setUser(profile.user);
+          }
+          return;
+        }
+        if (params.has('error')) throw new Error(params.get('error_description') || 'Sign-in link failed');
         const restored = await refreshSession();
         if (!cancelled && restored) { setToken(restored); await fetchUserProfile(restored); }
       } catch { if (!cancelled) handleLogout(); }
