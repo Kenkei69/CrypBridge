@@ -1,3 +1,5 @@
+import { assertPersistentKillSwitch } from './killSwitch.js';
+import { simulationAllowed } from '../../config/simulation.js';
 import { eq, or } from 'drizzle-orm';
 import {
   AppError,
@@ -36,7 +38,7 @@ export class SimulationSettlementEngine {
   constructor(db: any, appEnv = 'development') {
     this.db = db;
     this.appEnv = appEnv;
-    if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+    if (!simulationAllowed(appEnv)) {
       throw AppError.simulationForbidden('SimulationSettlementEngine is strictly prohibited in production');
     }
   }
@@ -48,10 +50,11 @@ export class SimulationSettlementEngine {
     payload: X402V2PaymentPayload,
     options?: SettlementSubmissionOptions
   ): Promise<X402V2SettlementResponse> {
-    if (this.appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+    if (!simulationAllowed(this.appEnv)) {
       throw AppError.simulationForbidden('Cannot settle simulation payment in production');
     }
 
+    await assertPersistentKillSwitch(this.db);
     const { faultInjection } = options || {};
 
     // 1. Check fault injection scenarios

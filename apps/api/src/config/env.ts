@@ -13,12 +13,13 @@ const EnvSchema = z.object({
   APP_ENV: z.enum(['development', 'test', 'production']).default('development'),
   NODE_ENV: z.string().default('development'),
   DATABASE_URL: z.string().url('DATABASE_URL must be a valid postgres connection string'),
-  SUPABASE_JWT_SECRET: z.string().min(16, 'SUPABASE_JWT_SECRET must be at least 16 characters for security'),
+  SUPABASE_JWT_SECRET: z.string().min(16).optional(),
+  ALLOW_HOSTED_SIMULATION: z.enum(['true', 'false']).default('false'),
+  SIMULATION_SIGNER_SECRET: z.string().min(32).optional(),
+  GUARDIAN_SIGNER_PERMIT_SECRET: z.string().min(32).optional(),
   SUPABASE_URL: z.string().url().optional(),
-  SIMULATION_MODE: z
-    .string()
-    .transform((val) => val === 'true' || val === '1')
-    .default('true'),
+  SIMULATION_MODE: z.enum(['true', 'false', '1', '0']).default('true')
+    .transform((val) => val === 'true' || val === '1'),
   ALLOWED_ORIGINS: z
     .string()
     .default('http://localhost:3000,http://127.0.0.1:3000')
@@ -46,6 +47,25 @@ export function loadConfig(overrides: Record<string, unknown> = {}): EnvConfig {
     throw new Error(`Invalid environment configuration: ${parsed.error.message}`);
   }
 
+  const production = parsed.data.APP_ENV === 'production' || parsed.data.NODE_ENV === 'production';
+  if (production) {
+    if (parsed.data.APP_ENV !== 'production' || !parsed.data.SUPABASE_URL?.startsWith('https://')) {
+      throw new Error('Production requires APP_ENV=production and an HTTPS SUPABASE_URL');
+    }
+    if (!parsed.data.SIMULATION_MODE || parsed.data.ALLOW_HOSTED_SIMULATION !== 'true') {
+      throw new Error('Only explicitly enabled hosted simulation is supported');
+    }
+    if (!parsed.data.SIMULATION_SIGNER_SECRET || !parsed.data.GUARDIAN_SIGNER_PERMIT_SECRET ||
+        parsed.data.SIMULATION_SIGNER_SECRET.includes('REPLACE_') || parsed.data.GUARDIAN_SIGNER_PERMIT_SECRET.includes('REPLACE_') ||
+        parsed.data.SIMULATION_SIGNER_SECRET === parsed.data.GUARDIAN_SIGNER_PERMIT_SECRET) {
+      throw new Error('Production requires separate simulation and Guardian secrets (32+ characters)');
+    }
+    if (parsed.data.ALLOWED_ORIGINS.some(origin => !origin.startsWith('https://') || origin.includes('*'))) {
+      throw new Error('Production requires exact HTTPS ALLOWED_ORIGINS');
+    }
+  } else if (!parsed.data.SUPABASE_JWT_SECRET) {
+    throw new Error('Development requires SUPABASE_JWT_SECRET');
+  }
   cachedEnv = parsed.data;
   return cachedEnv;
 }

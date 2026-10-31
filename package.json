@@ -4,21 +4,24 @@
   "private": true,
   "description": "x402 Guardian: AI-assisted purchasing and payment protection",
   "scripts": {
-    "build": "pnpm --filter \"@x402/*\" build",
-    "lint": "pnpm --filter \"@x402/*\" lint",
-    "test": "pnpm --filter \"@x402/api\" test",
-    "typecheck": "pnpm --filter \"@x402/*\" typecheck",
-    "db:migrate": "pnpm --filter \"@x402/database\" db:migrate",
-    "db:seed": "pnpm --filter \"@x402/database\" db:seed",
-    "dev:api": "pnpm --filter \"@x402/api\" dev",
-    "dev:web": "pnpm --filter \"@x402/web\" dev"
+    "build": "corepack pnpm --filter \"@x402/*\" build",
+    "lint": "corepack pnpm --filter \"@x402/*\" lint",
+    "test": "corepack pnpm --filter \"@x402/api\" test",
+    "typecheck": "corepack pnpm --filter \"@x402/*\" typecheck",
+    "db:migrate": "corepack pnpm --filter \"@x402/database\" db:migrate",
+    "db:seed": "corepack pnpm --filter \"@x402/database\" db:seed",
+    "dev:api": "corepack pnpm --filter \"@x402/api\" dev",
+    "dev:web": "corepack pnpm --filter \"@x402/web\" dev",
+    "build:api": "corepack pnpm --filter @x402/api... build",
+    "build:web": "corepack pnpm --filter @x402/web... build"
   },
   "devDependencies": {
     "playwright-core": "^1.64.1",
     "typescript": "^5.7.3"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=9.0.0"
-  }
+    "node": ">=24",
+    "pnpm": ">=11"
+  },
+  "packageManager": "pnpm@11.25.0"
 }

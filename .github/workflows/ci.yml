@@ -1,0 +1,41 @@
+name: Verify deployment
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: x402_guardian
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/x402_guardian
+      SUPABASE_JWT_SECRET: ci-only-test-secret-not-for-deployment
+      APP_ENV: test
+      SIMULATION_MODE: 'true'
+      NEXT_PUBLIC_API_URL: https://api.example.com
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-public-placeholder
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm build:api
+      - run: corepack pnpm typecheck
+      - run: corepack pnpm db:migrate
+      - run: corepack pnpm db:migrate
+      - run: corepack pnpm db:seed
+      - run: corepack pnpm test
+      - run: corepack pnpm audit --prod --audit-level=high
+      - run: corepack pnpm build:web

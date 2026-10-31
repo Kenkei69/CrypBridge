@@ -113,6 +113,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/api/v1/auth/test-token',
     async (request: FastifyRequest, reply: FastifyReply) => {
+      if (process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production') {
+        return reply.status(404).send({ error: { message: 'Not found' } });
+      }
       const parsed = TestTokenRequestSchema.safeParse(request.body);
       if (!parsed.success) {
         throw parsed.error;

@@ -1,3 +1,4 @@
+import { simulationAllowed } from '../../config/simulation.js';
 import {
   PHASE3_PINNED_EXECUTION,
   type ApprovalSnapshot,
@@ -71,7 +72,7 @@ export function evaluateAuthorizationGate(
   };
 
   // 1. Environment Safety Check (Simulation forbidden in production)
-  if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+  if (!simulationAllowed(appEnv)) {
     return {
       allowed: false,
       reasonCode: 'PRODUCTION_REFUSAL',

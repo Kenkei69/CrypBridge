@@ -1,3 +1,4 @@
+import { simulationAllowed } from '../../config/simulation.js';
 import {
   PHASE3_PINNED_EXECUTION,
   type ApprovalSnapshot,
@@ -93,9 +94,7 @@ export function evaluateGuardianPolicy(params: PolicyEvaluationParams): PureEval
 
   // 1. Production Isolation Rule
   const isProd =
-    appEnv === 'production' ||
-    process.env.NODE_ENV === 'production' ||
-    process.env.SIMULATION_MODE === 'false';
+    !simulationAllowed(appEnv);
 
   if (isProd) {
     recordRule(

@@ -1,3 +1,9 @@
 packages:
   - 'packages/*'
   - 'apps/*'
+overrides:
+  postcss: 8.5.23
+  electron-to-chromium: 1.5.200
+  node-releases: 2.0.19
+allowBuilds:
+  esbuild: true
