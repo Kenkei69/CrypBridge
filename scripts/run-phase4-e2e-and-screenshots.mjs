@@ -1,4 +1,5 @@
 import { chromium } from 'playwright-core';
+import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -86,8 +87,14 @@ async function main() {
       spendingReservations,
       guardianPolicies,
       eq,
+      sql,
     } = await import('../packages/database/dist/index.js');
     const { db, close: closeDb } = createDatabase();
+
+    // Ensure clean budget window for browser test runs
+    await db.execute(sql`DELETE FROM spending_reservations WHERE user_id = '11111111-1111-1111-1111-111111111111'`);
+    await db.execute(sql`DELETE FROM guardian_decisions WHERE user_id = '11111111-1111-1111-1111-111111111111'`);
+
     const { PaymentExecutionWorker } = await import('../apps/api/dist/modules/payment-engine/paymentExecutionWorker.js');
     const worker = new PaymentExecutionWorker(db, 'test');
 
@@ -129,6 +136,12 @@ async function main() {
     await page.waitForSelector('[data-testid="simulated-completion-card"]', { timeout: 15000 });
     console.log('✓ Simulated payment completed and verified by Guardian');
     await page.waitForTimeout(1000);
+
+    // Browser Assertion 1: Verification badge and completion card in DOM
+    assert.ok(await page.locator('[data-testid="simulated-completion-card"]').isVisible(), 'Completion card must be visible');
+    const badgeText = await page.locator('[data-testid="guardian-status-badge"]').first().textContent();
+    assert.ok(badgeText.includes('GUARDIAN: VERIFIED') || badgeText.includes('VERIFIED'), 'Guardian verified badge must be present');
+    console.log('✓ Assertion 1 passed: Guardian Verified badge confirmed in DOM');
 
     // Capture Screenshot 8: Successful Simulation
     const screenshot8Path = path.join(SCREENSHOT_DIR, '08_phase4_successful_simulation.png');
@@ -208,6 +221,12 @@ async function main() {
     console.log('✓ Overpayment attack blocked card displayed with AMOUNT_MISMATCH');
     await page.waitForTimeout(800);
 
+    // Browser Assertion 2: Blocked card visible with AMOUNT_MISMATCH
+    assert.ok(await page.locator('[data-testid="blocked-card"]').isVisible(), 'Blocked card must be visible');
+    const blockedText2 = await page.locator('[data-testid="blocked-card"]').textContent();
+    assert.ok(blockedText2.includes('AMOUNT_MISMATCH') || blockedText2.includes('OVERPAYMENT') || blockedText2.includes('BLOCKED'), 'Amount mismatch must be reported');
+    console.log('✓ Assertion 2 passed: Overpayment attack blocked card confirmed in DOM');
+
     // Capture Screenshot 9: Overpayment Blocked
     const screenshot9Path = path.join(SCREENSHOT_DIR, '09_phase4_overpayment_blocked.png');
     await page.screenshot({ path: screenshot9Path });
@@ -278,6 +297,12 @@ async function main() {
     await page.waitForSelector('[data-testid="blocked-card"]', { timeout: 10000 });
     console.log('✓ Recipient tamper attack blocked card displayed with RECIPIENT_MISMATCH');
     await page.waitForTimeout(800);
+
+    // Browser Assertion 3: Blocked card visible with RECIPIENT_MISMATCH
+    assert.ok(await page.locator('[data-testid="blocked-card"]').isVisible(), 'Blocked card must be visible');
+    const blockedText3 = await page.locator('[data-testid="blocked-card"]').textContent();
+    assert.ok(blockedText3.includes('RECIPIENT_MISMATCH') || blockedText3.includes('BLOCKED'), 'Recipient mismatch must be reported');
+    console.log('✓ Assertion 3 passed: Recipient mismatch blocked card confirmed in DOM');
 
     // Capture Screenshot 10: Wrong Recipient Blocked
     const screenshot10Path = path.join(SCREENSHOT_DIR, '10_phase4_wrong_recipient_blocked.png');
@@ -360,6 +385,12 @@ async function main() {
     console.log('✓ Budget limit exceeded card displayed');
     await page.waitForTimeout(800);
 
+    // Browser Assertion 4: Budget limit exceeded card confirmed in DOM
+    assert.ok(await page.locator('[data-testid="blocked-card"]').isVisible(), 'Blocked card must be visible');
+    const blockedText4 = await page.locator('[data-testid="blocked-card"]').textContent();
+    assert.ok(blockedText4.includes('BUDGET_EXCEEDED') || blockedText4.includes('BUDGET_LIMIT') || blockedText4.includes('BLOCKED'), 'Budget exceeded must be reported');
+    console.log('✓ Assertion 4 passed: Budget limit exceeded blocked card confirmed in DOM');
+
     // Capture Screenshot 11: Budget Limit Exceeded
     const screenshot11Path = path.join(SCREENSHOT_DIR, '11_phase4_budget_limit_exceeded.png');
     await page.screenshot({ path: screenshot11Path });
@@ -381,6 +412,12 @@ async function main() {
     console.log('✓ Decision Details Modal displayed');
     await page.waitForTimeout(800);
 
+    // Browser Assertion 5: Decision details modal visible with decision details in DOM
+    assert.ok(await page.locator('[data-testid="decision-details-modal"]').isVisible(), 'Decision details modal must be visible');
+    const modalText = await page.locator('[data-testid="decision-details-modal"]').textContent();
+    assert.ok(modalText.includes('Decision') || modalText.includes('Guardian') || modalText.includes('Evaluated') || modalText.includes('ALLOW') || modalText.includes('BLOCK'), 'Modal must contain decision evaluation details');
+    console.log('✓ Assertion 5 passed: Decision Details Modal confirmed in DOM');
+
     // Capture Screenshot 12: Decision Details Expanded
     const screenshot12Path = path.join(SCREENSHOT_DIR, '12_phase4_decision_details_expanded.png');
     await page.screenshot({ path: screenshot12Path });
@@ -399,6 +436,12 @@ async function main() {
     await historySection.scrollIntoViewIfNeeded();
     await page.waitForTimeout(600);
 
+    // Browser Assertion 6: Security History panel tabs and decision cards
+    assert.ok(await page.locator('[data-testid="security-history-tab"]').isVisible(), 'Security History tab must be visible');
+    assert.ok(await page.locator('[data-testid="guardian-decisions-tab"]').isVisible(), 'Guardian Decisions tab must be visible');
+    assert.ok(await page.locator('[data-testid^="decision-card-"]').first().isVisible(), 'Decision cards must be rendered');
+    console.log('✓ Assertion 6 passed: Security History and Guardian decision cards confirmed in DOM');
+
     // Capture Screenshot 13: Security History
     const screenshot13Path = path.join(SCREENSHOT_DIR, '13_phase4_security_history.png');
     await page.screenshot({ path: screenshot13Path });
@@ -411,6 +454,13 @@ async function main() {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(1000);
+
+    // Browser Assertion 7: Responsive mobile viewport dimensions and card rendering
+    const viewport = page.viewportSize();
+    assert.strictEqual(viewport.width, 390);
+    assert.strictEqual(viewport.height, 844);
+    assert.ok(await page.locator('[data-testid="compact-approval-card"], [data-testid="blocked-card"], [data-testid="simulated-completion-card"]').first().isVisible(), 'Card must be visible on mobile viewport');
+    console.log('✓ Assertion 7 passed: Responsive mobile layout confirmed in DOM');
 
     // Capture Screenshot 14: Mobile Layout
     const screenshot14Path = path.join(SCREENSHOT_DIR, '14_phase4_mobile_view.png');

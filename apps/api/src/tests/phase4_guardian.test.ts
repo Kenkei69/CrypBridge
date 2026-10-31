@@ -9,6 +9,7 @@ import {
   spendingReservations,
   guardianDecisions,
   paymentExecutions,
+  approvalSnapshots,
 } from '@x402/database/schema';
 import { evaluateGuardianPolicy } from '../modules/guardian/policyEvaluator.js';
 import {
@@ -18,6 +19,8 @@ import {
 } from '../modules/guardian/reservationService.js';
 import { generateExecutionPermit } from '../modules/guardian/authorizationService.js';
 import { ConstrainedSimulationSigner } from '../modules/payment-engine/constrainedSigner.js';
+import { SimulationSettlementEngine } from '../modules/payment-engine/simulationSettlementAdapter.js';
+import { MockMerchantService } from '../modules/mock-merchant/mockMerchantService.js';
 import { PaymentExecutionWorker } from '../modules/payment-engine/paymentExecutionWorker.js';
 import { setKillSwitch } from '../modules/payment-engine/killSwitch.js';
 
@@ -795,6 +798,237 @@ describe('Phase 4: Blue Team Guardian Security Engine, Atomic Reservations, & Wo
       const fetched = JSON.parse(aliceInspect.body).decision;
       assert.strictEqual(fetched.id, aliceDecision!.id);
       assert.strictEqual(fetched.outcome, 'ALLOW');
+    });
+  });
+
+  // =========================================================================
+  // 7. PHASE 4 REVIEW REGRESSIONS: MULTI-STATE SIGNER & BOUNDARY FENCING
+  // =========================================================================
+  describe('7. Phase 4 Review Regressions: Multi-State Signer & Boundary Fencing', () => {
+    it('enforces multi-state signer checks: rejects valid HMAC permit if database approval snapshot is inactive or expired', async () => {
+      const { execution, snapshot, approvedIntent } = await createApprovedExecution(aliceToken, undefined, undefined, true);
+
+      // Generate valid HMAC permit
+      const permit = generateExecutionPermit({
+        executionId: execution.id,
+        intentId: approvedIntent.id,
+        snapshotId: snapshot.id,
+        approvalVersion: snapshot.approvalVersion,
+        policyId: '00000000-0000-0000-0000-000000000010',
+        policyVersion: 1,
+        reservationId: '99999999-9999-9999-9999-999999999999',
+        fencingToken: 1,
+        recipientAddress: snapshot.trustedRecipientAddress,
+        amount: snapshot.exactAmount,
+        assetIdentifier: snapshot.assetIdentifier,
+        networkIdentifier: snapshot.networkIdentifier,
+        snapshotExpiresAt: snapshot.expiresAt,
+      });
+
+      // Revoke the snapshot in the database
+      await app.db
+        .update(approvalSnapshots)
+        .set({ status: 'revoked' })
+        .where(eq(approvalSnapshots.id, snapshot.id));
+
+      const signer = new ConstrainedSimulationSigner('development');
+      await assert.rejects(
+        async () => {
+          await signer.signSimulationAuthorization({
+            executionId: execution.id,
+            snapshot,
+            intent: approvedIntent,
+            requirementItem: {
+              scheme: 'exact',
+              network: snapshot.networkIdentifier,
+              asset: snapshot.assetIdentifier,
+              amount: snapshot.exactAmount,
+              payTo: snapshot.trustedRecipientAddress,
+            },
+            permit,
+            fencingToken: 1,
+            requirePermit: true,
+            db: app.db,
+          });
+        },
+        (err: any) => {
+          assert.strictEqual(err.statusCode, 400);
+          assert.ok(err.message.includes('not active in database'));
+          return true;
+        }
+      );
+    });
+
+    it('enforces multi-state signer checks: rejects valid HMAC permit if execution is already terminal in database', async () => {
+      const { execution, snapshot, approvedIntent } = await createApprovedExecution(aliceToken, undefined, undefined, true);
+
+      // Create a valid reservation for this execution
+      const reservation = await reserveSpendingBudget(app.db, {
+        userId: userAlice.userId,
+        purchaseIntentId: approvedIntent.id,
+        paymentExecutionId: execution.id,
+        assetIdentifier: snapshot.assetIdentifier,
+        networkIdentifier: snapshot.networkIdentifier,
+        amount: snapshot.exactAmount,
+      });
+      assert.ok(reservation.success && reservation.reservation);
+
+      const permit = generateExecutionPermit({
+        executionId: execution.id,
+        intentId: approvedIntent.id,
+        snapshotId: snapshot.id,
+        approvalVersion: snapshot.approvalVersion,
+        policyId: '00000000-0000-0000-0000-000000000010',
+        policyVersion: 1,
+        reservationId: reservation.reservation.id,
+        fencingToken: 1,
+        recipientAddress: snapshot.trustedRecipientAddress,
+        amount: snapshot.exactAmount,
+        assetIdentifier: snapshot.assetIdentifier,
+        networkIdentifier: snapshot.networkIdentifier,
+        snapshotExpiresAt: snapshot.expiresAt,
+      });
+
+      // Mark the execution as terminal SIMULATION_COMPLETED in the database
+      await app.db
+        .update(paymentExecutions)
+        .set({ executionStatus: 'SIMULATION_COMPLETED' })
+        .where(eq(paymentExecutions.id, execution.id));
+
+      const signer = new ConstrainedSimulationSigner('development');
+      await assert.rejects(
+        async () => {
+          await signer.signSimulationAuthorization({
+            executionId: execution.id,
+            snapshot,
+            intent: approvedIntent,
+            requirementItem: {
+              scheme: 'exact',
+              network: snapshot.networkIdentifier,
+              asset: snapshot.assetIdentifier,
+              amount: snapshot.exactAmount,
+              payTo: snapshot.trustedRecipientAddress,
+            },
+            permit,
+            fencingToken: 1,
+            requirePermit: true,
+            db: app.db,
+          });
+        },
+        (err: any) => {
+          assert.strictEqual(err.statusCode, 409);
+          assert.strictEqual(err.code, 'CONFLICT');
+          assert.ok(err.message.includes('terminal status') || err.details === 'EXECUTION_STATE_INVALID');
+          return true;
+        }
+      );
+    });
+
+    it('enforces settlement boundary fencing: adapter rejects superseded worker with stale fencing token', async () => {
+      const { execution, snapshot, approvedIntent } = await createApprovedExecution(aliceToken, undefined, undefined, true);
+
+      // Set database fencing token to 5
+      await app.db
+        .update(paymentExecutions)
+        .set({
+          fencingToken: 5,
+          workerLeaseExpiresAt: new Date(Date.now() + 60000),
+        })
+        .where(eq(paymentExecutions.id, execution.id));
+
+      const settlementEngine = new SimulationSettlementEngine(app.db, 'development');
+
+      // Attempt settlement with stale fencing token 3 (< 5)
+      const stalePayload: any = {
+        x402Version: 2,
+        accepted: {
+          scheme: 'exact',
+          network: 'eip155:84532',
+          asset: 'USDC',
+          amount: snapshot.exactAmount,
+          payTo: snapshot.trustedRecipientAddress,
+        },
+        payload: {
+          authorizationId: `sim_auth_${crypto.randomUUID()}`,
+          intentId: approvedIntent.id,
+          simulated: true,
+          extra: {
+            executionId: execution.id,
+            fencingToken: 3,
+          },
+        },
+      };
+
+      await assert.rejects(
+        async () => {
+          await settlementEngine.processSettlement(stalePayload);
+        },
+        (err: any) => {
+          assert.strictEqual(err.statusCode, 409);
+          assert.strictEqual(err.code, 'CONFLICT');
+          assert.ok(err.message.includes('Stale worker fencing token') || err.details === 'STALE_WORKER_FENCING_TOKEN');
+          return true;
+        }
+      );
+    });
+
+    it('enforces settlement boundary lease: adapter rejects worker whose lease has expired', async () => {
+      const { execution, snapshot, approvedIntent } = await createApprovedExecution(aliceToken, undefined, undefined, true);
+
+      // Set worker lease to the past
+      await app.db
+        .update(paymentExecutions)
+        .set({
+          fencingToken: 2,
+          workerLeaseExpiresAt: new Date(Date.now() - 5000), // expired 5 seconds ago
+        })
+        .where(eq(paymentExecutions.id, execution.id));
+
+      const settlementEngine = new SimulationSettlementEngine(app.db, 'development');
+
+      const expiredLeasePayload: any = {
+        x402Version: 2,
+        accepted: {
+          scheme: 'exact',
+          network: 'eip155:84532',
+          asset: 'USDC',
+          amount: snapshot.exactAmount,
+          payTo: snapshot.trustedRecipientAddress,
+        },
+        payload: {
+          authorizationId: `sim_auth_${crypto.randomUUID()}`,
+          intentId: approvedIntent.id,
+          simulated: true,
+          extra: {
+            executionId: execution.id,
+            fencingToken: 2,
+          },
+        },
+      };
+
+      await assert.rejects(
+        async () => {
+          await settlementEngine.processSettlement(expiredLeasePayload);
+        },
+        (err: any) => {
+          assert.strictEqual(err.statusCode, 409);
+          assert.strictEqual(err.code, 'CONFLICT');
+          assert.ok(err.message.includes('Worker lease expired') || err.details === 'STALE_WORKER_LEASE');
+          return true;
+        }
+      );
+    });
+
+    it('enforces simulation environment guard in MockMerchantService', async () => {
+      assert.throws(
+        () => {
+          new MockMerchantService(app.db, 'production');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SIMULATION_FORBIDDEN_IN_PROD');
+          return true;
+        }
+      );
     });
   });
 });

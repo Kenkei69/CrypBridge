@@ -18,7 +18,7 @@ Phase 4 of **x402 Guardian** implements the deterministic **Blue Team Guardian s
 4. **Worker Lease Fencing Tokens**: Monotonically increasing `fencing_token` counters protect against stale workers from lease expiration, process crashes, or network partitioning.
 5. **Explainable Security Ledger**: Every decision (ALLOW or BLOCK) is persisted to an append-only `guardian_decisions` table with structured check breakdowns, correlation IDs, and user tenant isolation.
 6. **Blue Team User Interface**: Enhanced Next.js frontend with real-time Guardian verification badges, expandable 5-check accordions, daily budget allowance meters, terms comparison for blocked payments, and filterable decision history modals.
-7. **Adversarial Verification**: 97 of 97 automated tests passing across 28 suites (including 21 adversarial Phase 4 tests), disposable database migration/seed verification, production build success, and 7 Playwright end-to-end browser screenshots.
+7. **Adversarial & Regression Verification**: 102 of 102 automated tests passing across 29 suites (including 26 adversarial Phase 4 tests and boundary regression tests), disposable database migration/seed verification, production build success, and 7 Playwright end-to-end browser assertions with screenshots.
 
 ---
 
@@ -42,11 +42,11 @@ Phase 4 of **x402 Guardian** implements the deterministic **Blue Team Guardian s
 ```bash
 pnpm --filter "@x402/api" test
 ```
-* **Tests Passed**: 97 / 97 (100%)
-* **Suites Passed**: 28 / 28 (100%)
+* **Tests Passed**: 102 / 102 (100%)
+* **Suites Passed**: 29 / 29 (100%)
 * **Failures**: 0
 * **Skipped**: 0
-* **Execution Duration**: 4.66s
+* **Execution Duration**: 5.26s
 
 ### 3.2 Monorepo Typecheck
 ```bash
@@ -62,11 +62,24 @@ pnpm build
 * Scope: `@x402/shared` (tsc), `@x402/database` (tsc), `@x402/api` (tsc), `@x402/web` (next build)
 * **Status**: Complete production build succeeded with exit code 0.
 
-### 3.4 Disposable Database Check
+### 3.4 Browser Suite with Actual Assertions
 ```bash
-DATABASE_URL="postgresql://postgres:password@helium/test_disposable_p4?sslmode=disable" pnpm db:migrate && pnpm db:seed
+node scripts/run-phase4-e2e-and-screenshots.mjs
 ```
-* **Status**: Cleanly migrated all 5 migrations (`0001` through `0005`) and applied seeds onto a clean temporary database, verifying schema idempotency and independence from primary storage.
+* **Browser Assertions Passed**: 7 / 7 (100%)
+  - Assertion 1: Guardian Verified badge and simulated completion card in DOM
+  - Assertion 2: Overpayment parameter attack blocked card and `AMOUNT_MISMATCH` in DOM
+  - Assertion 3: Recipient address mismatch blocked card and `RECIPIENT_MISMATCH` in DOM
+  - Assertion 4: Budget limit exceeded blocked card in DOM
+  - Assertion 5: Decision details modal with structured evaluation rules in DOM
+  - Assertion 6: Security history panel tabs and decision cards in DOM
+  - Assertion 7: Responsive mobile viewport dimensions (390×844) and card rendering in DOM
+
+### 3.5 Disposable Database Check
+```bash
+DATABASE_URL="postgresql://postgres:password@helium/disposable_p4_verification_...?sslmode=disable" pnpm db:migrate && pnpm db:seed
+```
+* **Status**: Cleanly migrated all 5 migrations (`0001` through `0005`) and applied seeds onto a fresh temporary disposable database, verified 16 tables, 3 merchants, and default policies, and dropped the disposable database cleanly.
 
 ---
 

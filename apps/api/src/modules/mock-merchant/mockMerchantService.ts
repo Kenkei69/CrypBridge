@@ -40,14 +40,22 @@ export interface MockMerchantResponse {
  */
 export class MockMerchantService {
   private readonly db: any;
+  private readonly appEnv: string;
   private readonly settlementEngine: SimulationSettlementEngine;
 
   constructor(db: any, appEnv = 'development') {
     this.db = db;
+    this.appEnv = appEnv;
+    if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+      throw AppError.simulationForbidden('MockMerchantService is strictly prohibited in production');
+    }
     this.settlementEngine = new SimulationSettlementEngine(db, appEnv);
   }
 
   async handleResourceRequest(req: MockMerchantRequest): Promise<MockMerchantResponse> {
+    if (this.appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+      throw AppError.simulationForbidden('Cannot process mock merchant resource in production');
+    }
     const { resourceId, paymentSignatureHeader, faultInjection } = req;
 
     // 1. Fetch resource and associated product & merchant

@@ -5,10 +5,12 @@ import {
   type X402V2PaymentPayload,
   type X402V2SettlementResponse,
 } from '@x402/shared';
-import { settlementRecords } from '@x402/database/schema';
+import { settlementRecords, paymentExecutions } from '@x402/database/schema';
 
 export interface SettlementSubmissionOptions {
   faultInjection?: 'timeout' | 'lost_response' | 'settlement_rejected' | 'network_drop';
+  fencingToken?: number;
+  workerId?: string;
 }
 
 export interface SettlementVerificationResult {
@@ -93,6 +95,44 @@ export class SimulationSettlementEngine {
 
     if (!authId || !intentId) {
       throw AppError.badRequest('Payload missing required authorization or intent identity');
+    }
+
+    // 2b. Boundary Fencing & Worker Lease Enforcement
+    // Ensure that expired or superseded workers cannot perform settlement side effects
+    if (executionId) {
+      const [exec] = await this.db
+        .select()
+        .from(paymentExecutions)
+        .where(eq(paymentExecutions.id, executionId))
+        .limit(1);
+
+      if (exec) {
+        // Enforce worker lease expiration at settlement adapter boundary
+        const now = new Date();
+        if (exec.workerLeaseExpiresAt && new Date(exec.workerLeaseExpiresAt) < now) {
+          throw AppError.conflict(
+            `SimulationSettlementEngine: Worker lease expired at ${exec.workerLeaseExpiresAt}. Settlement side effects refused.`,
+            'STALE_WORKER_LEASE'
+          );
+        }
+
+        // Enforce fencing token monotonic barrier at settlement adapter boundary
+        const payloadFencingToken = payload.payload.extra?.fencingToken;
+        const callerFencingToken = options?.fencingToken ?? payloadFencingToken;
+        if (
+          callerFencingToken !== undefined &&
+          callerFencingToken !== null &&
+          exec.fencingToken !== null &&
+          exec.fencingToken !== undefined
+        ) {
+          if (callerFencingToken < exec.fencingToken) {
+            throw AppError.conflict(
+              `SimulationSettlementEngine: Stale worker fencing token (${callerFencingToken} < current ${exec.fencingToken}). Superseded worker cannot settle.`,
+              'STALE_WORKER_FENCING_TOKEN'
+            );
+          }
+        }
+      }
     }
 
     // 3. Replay Protection: Check if this purchase intent or authorization has already been settled

@@ -120,7 +120,7 @@ export class GuardianEngine {
         userId: params.userId,
         purchaseIntentId: params.intent.id,
         paymentExecutionId: params.paymentExecutionId,
-        taskId: params.taskId || params.intent.id,
+        taskId: params.taskId || params.intent.conversationId || params.intent.id,
         assetIdentifier: effectiveAsset,
         networkIdentifier: effectiveNetwork,
         amount: effectiveAmount,

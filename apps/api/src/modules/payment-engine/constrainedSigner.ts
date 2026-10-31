@@ -11,7 +11,7 @@ import {
 } from '@x402/shared';
 import { isKillSwitchActive, getKillSwitchStatus } from './killSwitch.js';
 import { verifyExecutionPermit } from '../guardian/authorizationService.js';
-import { spendingReservations, paymentExecutions } from '@x402/database/schema';
+import { spendingReservations, paymentExecutions, approvalSnapshots } from '@x402/database/schema';
 
 // Server-side secret for simulated HMAC integrity token (never exposed to client)
 const SIMULATION_SIGNER_SECRET = process.env.SIMULATION_SIGNER_SECRET || 'x402_guardian_internal_sim_signer_secret_k92';
@@ -119,8 +119,30 @@ export class ConstrainedSimulationSigner {
         );
       }
 
-      // 0d. Check active spending reservation and worker generation in DB if db instance provided
+      // 0d. Check active approval snapshot, spending reservation, and worker generation in DB if db instance provided
       if (db) {
+        // 0d-1: Verify Current Approval Snapshot State in Database
+        const [dbSnapshot] = await db
+          .select()
+          .from(approvalSnapshots)
+          .where(eq(approvalSnapshots.id, snapshot.id))
+          .limit(1);
+
+        if (!dbSnapshot || dbSnapshot.status !== 'active') {
+          throw AppError.badRequest(
+            `ConstrainedSigner: Approval snapshot ${snapshot.id} is not active in database (status: ${dbSnapshot?.status || 'NOT_FOUND'})`
+          );
+        }
+        if (new Date(dbSnapshot.expiresAt) < now) {
+          throw AppError.badRequest(`ConstrainedSigner: Approval snapshot ${snapshot.id} has expired in database`);
+        }
+        if (dbSnapshot.approvalVersion !== intent.version) {
+          throw AppError.badRequest(
+            `ConstrainedSigner: Database approval version mismatch (${dbSnapshot.approvalVersion} != ${intent.version})`
+          );
+        }
+
+        // 0d-2: Verify Current Spending Reservation State in Database
         const [resRecord] = await db
           .select()
           .from(spendingReservations)
@@ -133,17 +155,35 @@ export class ConstrainedSimulationSigner {
           );
         }
 
+        // 0d-3: Verify Current Execution State, Worker Lease, and Fencing in Database
         const [execRecord] = await db
           .select()
           .from(paymentExecutions)
           .where(eq(paymentExecutions.id, executionId))
           .limit(1);
 
-        if (execRecord && fencingToken !== undefined && execRecord.fencingToken !== fencingToken) {
-          throw AppError.conflict(
-            `ConstrainedSigner: Stale worker fencing token in database (${execRecord.fencingToken} != ${fencingToken}). Lease superseded.`,
-            'STALE_WORKER_FENCING_TOKEN'
-          );
+        if (execRecord) {
+          const terminalStatuses = ['SIMULATION_COMPLETED', 'SETTLED', 'BLOCKED', 'CANCELLED', 'REJECTED', 'FAILED'];
+          if (terminalStatuses.includes(execRecord.executionStatus)) {
+            throw AppError.conflict(
+              `ConstrainedSigner: Execution ${executionId} is in terminal status (${execRecord.executionStatus}). Signing refused.`,
+              'EXECUTION_STATE_INVALID'
+            );
+          }
+
+          if (execRecord.workerLeaseExpiresAt && new Date(execRecord.workerLeaseExpiresAt) < now) {
+            throw AppError.conflict(
+              `ConstrainedSigner: Worker lease for execution ${executionId} expired at ${execRecord.workerLeaseExpiresAt}`,
+              'STALE_WORKER_LEASE'
+            );
+          }
+
+          if (fencingToken !== undefined && execRecord.fencingToken !== fencingToken) {
+            throw AppError.conflict(
+              `ConstrainedSigner: Stale worker fencing token in database (${execRecord.fencingToken} != ${fencingToken}). Lease superseded.`,
+              'STALE_WORKER_FENCING_TOKEN'
+            );
+          }
         }
       }
     }

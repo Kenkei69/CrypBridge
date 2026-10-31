@@ -4,7 +4,7 @@
 [![Fastify](https://img.shields.io/badge/Fastify-5.2-black.svg)](https://fastify.dev/)
 [![Next.js](https://img.shields.io/badge/Next.js-14.2-black.svg)](https://nextjs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16.10-336791.svg)](https://www.postgresql.org/)
-[![Tests](https://img.shields.io/badge/Tests-97%20Passing-emerald.svg)](./apps/api/src/tests)
+[![Tests](https://img.shields.io/badge/Tests-102%20Passing-emerald.svg)](./apps/api/src/tests)
 
 x402 Guardian protects AI-assisted purchases by checking proposed payments against trusted user authorization before signing or onchain settlement.
 
@@ -58,7 +58,7 @@ pnpm db:seed
 ```
 
 ### 4. Run Test Suite
-Runs the 97 automated tests against the real PostgreSQL database:
+Runs the 102 automated tests against the real PostgreSQL database:
 ```bash
 pnpm test
 ```
@@ -122,7 +122,7 @@ pnpm dev:web
 2. **Authoritative Catalog Pricing**: Creation and switching of purchase intents ignores client-provided amounts and recipients, sourcing values exclusively from verified database records.
 3. **Pessimistic & Optimistic Concurrency**: Approvals acquire transactional `FOR UPDATE` locks and verify `expectedVersion` to prevent race conditions and double spending.
 4. **Pre-Signing Authorization Gate & Guardian Engine**: The engine never produces payment signatures without passing through Blue Team Guardian policy evaluation (exact amount, recipient, network, token, and budget validation).
-5. **Atomic Spending Reservations**: Reservations are committed atomically using PostgreSQL row-level locks (`SELECT ... FOR UPDATE`), preventing concurrent overspending of daily budgets. Survives crashes via two-phase state transitions (`RESERVED` -> `COMMITTED` or `RELEASED`).
+5. **Atomic Spending Reservations**: Reservations are evaluated and created atomically using PostgreSQL row-level locks (`SELECT ... FOR UPDATE`), preventing concurrent overspending of daily budgets. Survives crashes and restarts via an explicit reservation lifecycle (`RESERVED` -> `COMMITTED` or `RELEASED`).
 6. **Worker Lease Monotonic Fencing**: A strictly increasing `fencing_token` is recorded on executions and checked on settlement, preventing stale, resurrected, or split-brain workers from generating duplicate settlements.
 7. **Independent Cryptographic Permit Enforcement**: The `ConstrainedSimulationSigner` independently validates an HMAC-SHA256 `ExecutionPermit` signed by the Guardian key before generating headers. Altered terms or missing permits are refused with `UNAUTHORIZED_PAYMENT_REQUEST`.
 8. **Constrained Simulation Signer**: The signer only emits HMAC-SHA256 integrity tokens and throws `SIGNER_REFUSED_PRODUCTION` if target network is a mainnet chain.
