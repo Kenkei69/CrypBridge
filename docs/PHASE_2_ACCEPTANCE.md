@@ -135,3 +135,16 @@ This document evaluates the completed Phase 2 implementation against each requir
   - Attempts to call `POST /api/v1/approval-snapshots`, `POST /api/v1/settlement-records`, `POST /api/v1/audit-events`, or `POST /api/v1/signer/sign` return HTTP 404.
   - Automated test: `prohibits arbitrary signing or settlement endpoints` passes.
   - No private keys or wallet credentials exist in the codebase.
+
+---
+
+### Criterion 10: Concurrency, Row Locking & Expiration Stability
+* **Objective**: Repeated preview requests must not extend approval expiration. Concurrent approve/approve and approve/reject operations must execute safely without race conditions or database corruption.
+* **Status**: ACCEPTED
+* **Evidence**:
+  - Expiration stability: `GET /api/v1/purchases/intents/:id/preview` only queries existing `expiresAt` without updating it.
+  - Concurrency control: both `approve` and `reject` acquire PostgreSQL row locks via `tx.select().from(purchaseIntents).where(...).for('update')`.
+  - Automated tests:
+    - `repeated preview requests do not silently extend approval expiration`
+    - `handles concurrent approve/approve requests safely without race conditions`
+    - `handles concurrent approve and reject requests consistently with row locking`

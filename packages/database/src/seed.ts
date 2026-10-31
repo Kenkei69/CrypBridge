@@ -15,6 +15,9 @@ export async function runSeed(connectionString?: string): Promise<SeedResult> {
   console.log('[seed] Seeding trusted merchants, catalog products, and payment options...');
 
   try {
+    // Demonstration merchants for local sandbox and simulation testing
+    // Note: isTrusted: true represents trusted status within the demonstration database schema,
+    // not an external cryptographic proof or real-world commercial verification claim.
     const seedMerchants = [
       {
         id: '11111111-1111-1111-1111-111111111111',

@@ -94,8 +94,11 @@ export function CatalogBrowser({
                   <div className="flex items-center gap-1.5">
                     <Shield className="w-3.5 h-3.5 text-blue-400" />
                     <span className="text-gray-300 font-medium">{product.merchant.name}</span>
+                    <span className="text-[10px] text-amber-400/80 bg-amber-950/40 px-1 py-0.2 rounded border border-amber-900/40 font-mono">
+                      (Demo Data)
+                    </span>
                     {product.merchant.isTrusted && (
-                      <span title="Trusted Merchant">
+                      <span title="Trusted Merchant in Demonstration Environment">
                         <CheckCircle className="w-3 h-3 text-emerald-400" />
                       </span>
                     )}

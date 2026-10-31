@@ -682,55 +682,58 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
       const parsed = RejectPurchaseIntentSchema.safeParse(request.body);
       const reason = (parsed.success && parsed.data.reason) ? parsed.data.reason : 'User explicitly rejected terms';
 
-      const [intent] = await app.db
-        .select()
-        .from(purchaseIntents)
-        .where(and(eq(purchaseIntents.id, intentId), eq(purchaseIntents.userId, userId)))
-        .limit(1);
+      return app.db.transaction(async (tx) => {
+        const [intent] = await tx
+          .select()
+          .from(purchaseIntents)
+          .where(and(eq(purchaseIntents.id, intentId), eq(purchaseIntents.userId, userId)))
+          .for('update')
+          .limit(1);
 
-      if (!intent) {
-        throw AppError.notFound('Purchase Intent');
-      }
+        if (!intent) {
+          throw AppError.notFound('Purchase Intent');
+        }
 
-      // Invalidate any active approval snapshots
-      await app.db
-        .update(approvalSnapshots)
-        .set({ status: 'superseded', updatedAt: new Date() })
-        .where(
-          and(
-            eq(approvalSnapshots.purchaseIntentId, intentId),
-            eq(approvalSnapshots.status, 'active')
-          )
-        );
+        // Invalidate any active approval snapshots
+        await tx
+          .update(approvalSnapshots)
+          .set({ status: 'superseded', updatedAt: new Date() })
+          .where(
+            and(
+              eq(approvalSnapshots.purchaseIntentId, intentId),
+              eq(approvalSnapshots.status, 'active')
+            )
+          );
 
-      const [updatedIntent] = await app.db
-        .update(purchaseIntents)
-        .set({
+        const [updatedIntent] = await tx
+          .update(purchaseIntents)
+          .set({
+            status: 'rejected',
+            rejectionReason: reason,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(purchaseIntents.id, intentId), eq(purchaseIntents.userId, userId)))
+          .returning();
+
+        await recordAuditEvent(tx, {
+          userId,
+          eventType: 'PURCHASE_INTENT_REJECTED',
+          actorType: 'user',
+          resourceType: 'purchase_intent',
+          resourceId: intentId,
+          payload: {
+            reason,
+            version: intent.version,
+          },
+          ipAddress: request.ip || null,
+          userAgent: (request.headers['user-agent'] as string) || null,
+        });
+
+        return {
           status: 'rejected',
-          rejectionReason: reason,
-          updatedAt: new Date(),
-        })
-        .where(and(eq(purchaseIntents.id, intentId), eq(purchaseIntents.userId, userId)))
-        .returning();
-
-      await recordAuditEvent(app.db, {
-        userId,
-        eventType: 'PURCHASE_INTENT_REJECTED',
-        actorType: 'user',
-        resourceType: 'purchase_intent',
-        resourceId: intentId,
-        payload: {
-          reason,
-          version: intent.version,
-        },
-        ipAddress: request.ip || null,
-        userAgent: (request.headers['user-agent'] as string) || null,
+          intent: updatedIntent,
+        };
       });
-
-      return {
-        status: 'rejected',
-        intent: updatedIntent,
-      };
     }
   );
 }

@@ -2,9 +2,9 @@
 
 **Date**: 2026-10-31  
 **Author**: Implementation Engineer  
-**Status**: Completed (Local Verification Only — NOT Published)  
+**Status**: Ready for Direct GitHub Publication  
 **Branch**: `main`  
-**Test Suite**: 48/48 Passing (0 Failures, 0 Skipped, 13 Suites)  
+**Test Suite**: 51/51 Passing (0 Failures, 0 Skipped, 13 Suites)  
 **Browser E2E Verification**: 10/10 Journey Steps Verified  
 
 ---
@@ -124,8 +124,8 @@ To prevent race conditions, double approvals, and stale parameter exploitation:
 
 ### 1. Automated Test Suite (Backend & Integration)
 Run with `pnpm test`:
-- **Total Tests**: 48
-- **Passing**: 48
+- **Total Tests**: 51
+- **Passing**: 51
 - **Failing**: 0
 - **Suites**: 13
 - **Coverage**:
@@ -134,6 +134,7 @@ Run with `pnpm test`:
   - Phase 2 payment option switching, version incrementing, and tenant isolation: 3 tests
   - Phase 2 authoritative approval preview, optimistic locking, immutable snapshots, idempotency, and supersession: 5 tests
   - Phase 2 rejection journey, rejection reason persistence, and anti-fabrication gates: 3 tests
+  - Phase 2 expiration stability and database-backed concurrency (repeated previews do not extend expiration, concurrent approve/approve row locking, concurrent approve/reject row locking): 3 tests
   - PostgreSQL Row Level Security and unprivileged role isolation: 2 tests
   - Write semantics and anti-fabrication endpoints: 4 tests
 
@@ -184,14 +185,15 @@ Automated direct browser interactions using Playwright verified the complete 10-
 | :--- | :--- | :--- |
 | **Typecheck** | `pnpm typecheck` | Passed (0 errors across 4 projects) |
 | **Lint** | `pnpm lint` | Passed (0 warnings, 0 errors) |
-| **Unit & Integration Tests** | `pnpm test` | Passed (48/48 passed, 0 failed) |
+| **Unit & Integration Tests** | `pnpm test` | Passed (51/51 passed, 0 failed) |
 | **Build** | `pnpm build` | Passed (Production builds for `@x402/shared`, `@x402/database`, `@x402/api`, `@x402/web`) |
 | **Browser E2E** | `node scripts/run-e2e-and-screenshots.mjs` | Passed (10/10 steps verified, 6 screenshots captured) |
 
 ---
 
-## 7. Known Boundaries & Phase 3 Preparation
+## 7. Known Boundaries & Scope Clarifications
 
 1. **Authorization Boundary**: Phase 2 explicitly terminates at purchase approval. No wallet keys or signing endpoints are exposed.
-2. **Phase 3 Hand-off**: In Phase 3, the `ApprovalSnapshot` created here will serve as the sole authoritative spending input to the `GuardianEvaluationEngine` and `PaymentSigner` for wallet challenge signing and x402 settlement.
-3. **Publication Status**: **Strictly Local**. No remote git operations, branch creations, PRs, or public network deployments were made.
+2. **Demonstration Merchants & Verification Claims**: Seeded merchants (`Cloud Compute Corp`, `Model Host Labs`, `Secure Data API`) are demonstration fixtures for local testing. Their `isTrusted: true` attribute designates demo catalog authorization for test scenarios and is explicitly labeled as demonstration data without unsupported commercial verification claims.
+3. **Deterministic Assistant & Untested Live-Provider Scope**: The active implementation is `DeterministicDemoAdapter`, providing deterministic catalog grounding, budget extraction, and prompt injection defense. The `LiveProviderAdapter` is an optional wrapper containing timeout bounds and fallback logic; because external LLM API keys are not provided in this offline environment, live-provider network calls are untested and cleanly fall back to `DeterministicDemoAdapter`.
+4. **Phase 3 Hand-off**: In Phase 3, the `ApprovalSnapshot` created here will serve as the sole authoritative spending input to the `GuardianEvaluationEngine` and `PaymentSigner` for wallet challenge signing and x402 settlement.

@@ -193,6 +193,14 @@ stateDiagram-v2
     Approved --> [*]: Authorization complete (payment execution withheld until Phase 3)
 ```
 
+### Assistant Architecture & Live Provider Scope
+- **Active Production Default (`DeterministicDemoAdapter`)**:
+  The active assistant implementation is [`DeterministicDemoAdapter`](file:///home/runner/workspace/apps/api/src/modules/purchasing-assistant/assistantService.ts#L35). It executes catalog-grounded keyword parsing, numeric/currency budget extraction, conversational reference resolution (e.g. *"the first one"*), and prompt-injection defense locally without external network dependencies.
+- **Untested Live Provider Shell (`LiveProviderAdapter`)**:
+  [`LiveProviderAdapter`](file:///home/runner/workspace/apps/api/src/modules/purchasing-assistant/assistantService.ts#L219) provides an integration shell with `AbortController` timeouts and bounded fallbacks for optional external LLM services. Because external API keys (`AI_PROVIDER_API_KEY`) are not provided in this offline environment, live-provider network calls are untested and explicitly fall back to `DeterministicDemoAdapter`.
+- **Demonstration Merchants & Verification Scope**:
+  The seeded merchants (`Cloud Compute Corp`, `Model Host Labs`, `Secure Data API`) are demonstration data fixtures. The database attribute `isTrusted: true` designates demo catalog authorization for test scenarios; it does not constitute real-world legal, financial, or third-party cryptographic verification.
+
 ### Concurrency & Locking Architecture
 To guarantee that payments cannot be approved against stale prices, modified options, or through concurrent duplicate clicks:
 1. **Pessimistic Row Locking**: When `POST /api/v1/purchases/intents/:id/approve` is called, the transaction locks the intent record with:

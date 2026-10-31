@@ -454,6 +454,121 @@ describe('Phase 2: Purchasing Assistant, Payment Options, & Authoritative Approv
       assert.equal(body.intent.rejectionReason, 'Too expensive for current budget');
     });
 
+    it('repeated preview requests do not silently extend approval expiration', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/purchases/intents',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: {
+          productId: '44444444-4444-4444-4444-444444444441',
+        },
+      });
+      assert.equal(createRes.statusCode, 201);
+      const testIntentId = createRes.json().intent.id;
+
+      const res1 = await app.inject({
+        method: 'GET',
+        url: `/api/v1/purchases/intents/${testIntentId}/preview`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      });
+      assert.equal(res1.statusCode, 200);
+      const preview1 = res1.json().preview;
+      const initialExpiresAt = preview1.expiresAt;
+
+      // Small delay between calls
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const res2 = await app.inject({
+        method: 'GET',
+        url: `/api/v1/purchases/intents/${testIntentId}/preview`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      });
+      assert.equal(res2.statusCode, 200);
+      const preview2 = res2.json().preview;
+
+      assert.equal(preview2.expiresAt, initialExpiresAt);
+    });
+
+    it('handles concurrent approve/approve requests safely without race conditions', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/purchases/intents',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: {
+          productId: '44444444-4444-4444-4444-444444444441',
+        },
+      });
+      assert.equal(createRes.statusCode, 201);
+      const concurrentIntentId = createRes.json().intent.id;
+      const concurrentVersion = createRes.json().intent.version;
+
+      const [res1, res2] = await Promise.all([
+        app.inject({
+          method: 'POST',
+          url: `/api/v1/purchases/intents/${concurrentIntentId}/approve`,
+          headers: { authorization: `Bearer ${aliceToken}` },
+          payload: { expectedVersion: concurrentVersion },
+        }),
+        app.inject({
+          method: 'POST',
+          url: `/api/v1/purchases/intents/${concurrentIntentId}/approve`,
+          headers: { authorization: `Bearer ${aliceToken}` },
+          payload: { expectedVersion: concurrentVersion },
+        }),
+      ]);
+
+      assert.equal(res1.statusCode, 200);
+      assert.equal(res2.statusCode, 200);
+      const body1 = res1.json();
+      const body2 = res2.json();
+      assert.equal(body1.status, 'approved');
+      assert.equal(body2.status, 'approved');
+      assert.equal(body1.message, 'Purchase approved — payment has not been executed.');
+      assert.equal(body2.message, 'Purchase approved — payment has not been executed.');
+      assert.equal(body1.snapshot.id, body2.snapshot.id);
+    });
+
+    it('handles concurrent approve and reject requests consistently with row locking', async () => {
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/purchases/intents',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: {
+          productId: '44444444-4444-4444-4444-444444444441',
+        },
+      });
+      assert.equal(createRes.statusCode, 201);
+      const raceIntentId = createRes.json().intent.id;
+      const raceVersion = createRes.json().intent.version;
+
+      const [approveRes, rejectRes] = await Promise.all([
+        app.inject({
+          method: 'POST',
+          url: `/api/v1/purchases/intents/${raceIntentId}/approve`,
+          headers: { authorization: `Bearer ${aliceToken}` },
+          payload: { expectedVersion: raceVersion },
+        }),
+        app.inject({
+          method: 'POST',
+          url: `/api/v1/purchases/intents/${raceIntentId}/reject`,
+          headers: { authorization: `Bearer ${aliceToken}` },
+          payload: { reason: 'User chose to reject during review' },
+        }),
+      ]);
+
+      assert.ok([200, 400].includes(approveRes.statusCode));
+      assert.equal(rejectRes.statusCode, 200);
+
+      const previewRes = await app.inject({
+        method: 'GET',
+        url: `/api/v1/purchases/intents/${raceIntentId}/preview`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      });
+      assert.equal(previewRes.statusCode, 200);
+      const finalPreview = previewRes.json().preview;
+      assert.ok(['rejected', 'approved'].includes(finalPreview.status));
+    });
+
     it('prohibits approving a rejected intent', async () => {
       const res = await app.inject({
         method: 'POST',

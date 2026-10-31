@@ -4,7 +4,7 @@
 [![Fastify](https://img.shields.io/badge/Fastify-5.2-black.svg)](https://fastify.dev/)
 [![Next.js](https://img.shields.io/badge/Next.js-14.2-black.svg)](https://nextjs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16.10-336791.svg)](https://www.postgresql.org/)
-[![Tests](https://img.shields.io/badge/Tests-48%20Passing-emerald.svg)](./apps/api/src/tests)
+[![Tests](https://img.shields.io/badge/Tests-51%20Passing-emerald.svg)](./apps/api/src/tests)
 
 x402 Guardian protects AI-assisted purchases by checking proposed payments against trusted user authorization before signing or onchain settlement.
 
@@ -58,7 +58,7 @@ pnpm db:seed
 ```
 
 ### 4. Run Test Suite
-Runs the 48 automated tests against the real PostgreSQL database:
+Runs the 51 automated tests against the real PostgreSQL database:
 ```bash
 pnpm test
 ```
