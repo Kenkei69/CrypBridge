@@ -1,4 +1,4 @@
-# x402 Guardian (CrypBridge)
+# CrypBridge — x402 Guardian
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.2-black.svg)](https://fastify.dev/)
@@ -38,7 +38,7 @@ cp .env.example .env
 ```
 
 Key variables:
-- `DATABASE_URL`: PostgreSQL connection string (e.g. `postgresql://postgres:password@localhost:5432/x402_guardian`)
+- `DATABASE_URL`: PostgreSQL connection string (e.g. `postgresql://postgres:postgres@localhost:5432/x402_guardian`)
 - `SUPABASE_JWT_SECRET`: Secret key for JWT verification (minimum 16 characters)
 - `SIMULATION_MODE`: `true` (enforces simulation mode in Phase 1)
 - `ALLOWED_ORIGINS`: Comma-separated allowed origins (e.g. `http://localhost:3000`)
