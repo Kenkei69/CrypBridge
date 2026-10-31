@@ -34,6 +34,10 @@ export interface PaymentExecution {
   idempotencyKey?: string | null;
   failureCode?: string | null;
   failureReason?: string | null;
+  fencingToken?: number | null;
+  permitId?: string | null;
+  guardianDecisionId?: string | null;
+  spendingReservationId?: string | null;
   reconciliationAttempts: number;
   lastReconciledAt?: string | null;
   deliveredResource?: {

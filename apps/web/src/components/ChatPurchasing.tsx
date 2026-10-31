@@ -15,7 +15,16 @@ import {
 } from 'lucide-react';
 import { SafeContentRenderer } from './SafeContentRenderer';
 import { CompactApprovalCard } from './CompactApprovalCard';
-import type { Message, Conversation, ApprovalPreview, Product, PaymentOption, PaymentExecution } from '@x402/shared';
+import type {
+  Message,
+  Conversation,
+  ApprovalPreview,
+  Product,
+  PaymentOption,
+  PaymentExecution,
+  UserBudgetSummary,
+  GuardianDecision,
+} from '@x402/shared';
 
 interface ChatPurchasingProps {
   conversations: Conversation[];
@@ -29,6 +38,8 @@ interface ChatPurchasingProps {
   activeIntent?: any | null;
   approvalPreview?: ApprovalPreview | null;
   execution?: PaymentExecution | null;
+  budget?: UserBudgetSummary | null;
+  guardianDecision?: GuardianDecision | null;
   onSelectProduct?: (product: any) => Promise<void>;
   onSelectOption?: (optionId: string) => Promise<void>;
   onApprove?: (expectedVersion: number) => Promise<void>;
@@ -49,6 +60,8 @@ export function ChatPurchasing({
   activeIntent = null,
   approvalPreview = null,
   execution = null,
+  budget = null,
+  guardianDecision = null,
   onSelectProduct,
   onSelectOption,
   onApprove,
@@ -315,6 +328,8 @@ export function ChatPurchasing({
                     preview={approvalPreview}
                     execution={execution}
                     loading={approvalLoading}
+                    budget={budget}
+                    guardianDecision={guardianDecision}
                     onApprove={onApprove}
                     onReject={onReject}
                     onSelectOption={onSelectOption}

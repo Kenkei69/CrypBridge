@@ -10,7 +10,7 @@ import {
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 // 1. Profiles (linked to Supabase auth.users or authentication identity)
 export const profiles = pgTable(
@@ -232,10 +232,21 @@ export const guardianDecisions = pgTable(
     purchaseIntentId: uuid('purchase_intent_id')
       .notNull()
       .references(() => purchaseIntents.id, { onDelete: 'cascade' }),
-    decision: text('decision').notNull(), // 'allow' | 'block' | 'require_reapproval'
+    userId: uuid('user_id').references(() => profiles.id, { onDelete: 'cascade' }),
+    approvalSnapshotId: uuid('approval_snapshot_id').references(() => approvalSnapshots.id, { onDelete: 'set null' }),
+    paymentExecutionId: uuid('payment_execution_id'),
+    reservationId: uuid('reservation_id'),
+    permitId: text('permit_id'),
+    policyVersion: integer('policy_version').notNull().default(1),
+    outcome: text('outcome').notNull().default('ALLOW'), // 'ALLOW' | 'BLOCK'
+    reasonCode: text('reason_code').notNull().default('AUTHORIZED'),
+    decision: text('decision').notNull().default('allow'), // 'allow' | 'block' | 'require_reapproval'
     reason: text('reason').notNull(),
     riskScore: integer('risk_score').notNull().default(0),
     rulesEvaluated: jsonb('rules_evaluated').notNull().default([]),
+    canonicalTerms: jsonb('canonical_terms').notNull().default({}),
+    proposedTerms: jsonb('proposed_terms').notNull().default({}),
+    correlationId: text('correlation_id'),
     simulated: boolean('simulated').notNull().default(true),
     evaluatedAt: timestamp('evaluated_at', { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -243,6 +254,11 @@ export const guardianDecisions = pgTable(
   (table) => [
     index('guardian_decisions_intent_id_idx').on(table.purchaseIntentId),
     index('guardian_decisions_decision_idx').on(table.decision),
+    index('guardian_decisions_user_idx').on(table.userId),
+    index('guardian_decisions_execution_idx').on(table.paymentExecutionId),
+    index('guardian_decisions_outcome_idx').on(table.outcome),
+    index('guardian_decisions_reason_code_idx').on(table.reasonCode),
+    index('guardian_decisions_correlation_idx').on(table.correlationId),
   ]
 );
 
@@ -331,6 +347,10 @@ export const paymentExecutions = pgTable(
     deliveredResource: jsonb('delivered_resource'),
     workerId: text('worker_id'),
     workerLeaseExpiresAt: timestamp('worker_lease_expires_at', { withTimezone: true }),
+    fencingToken: integer('fencing_token').notNull().default(1),
+    permitId: text('permit_id'),
+    guardianDecisionId: uuid('guardian_decision_id'),
+    spendingReservationId: uuid('spending_reservation_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -341,6 +361,7 @@ export const paymentExecutions = pgTable(
     index('payment_executions_lease_idx').on(table.workerLeaseExpiresAt),
     index('payment_executions_settlement_ref_idx').on(table.settlementReference),
     index('payment_executions_idempotency_idx').on(table.idempotencyKey),
+    index('payment_executions_fencing_idx').on(table.fencingToken),
   ]
 );
 
@@ -364,6 +385,73 @@ export const mockMerchantResources = pgTable(
   (table) => [
     index('mock_merchant_resources_product_id_idx').on(table.productId),
     index('mock_merchant_resources_merchant_id_idx').on(table.merchantId),
+  ]
+);
+
+// 10d. Guardian Spending Policies (Phase 4: Per-payment, per-task, and daily UTC budget controls)
+export const guardianPolicies = pgTable(
+  'guardian_policies',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id').references(() => profiles.id, { onDelete: 'cascade' }),
+    policyVersion: integer('policy_version').notNull().default(1),
+    assetIdentifier: text('asset_identifier').notNull().default('USDC'),
+    networkIdentifier: text('network_identifier').notNull().default('eip155:84532'),
+    maxAmountPerPayment: numeric('max_amount_per_payment', { precision: 78, scale: 0 }).notNull(),
+    maxAmountPerTask: numeric('max_amount_per_task', { precision: 78, scale: 0 }).notNull(),
+    maxAmountPerDailyWindow: numeric('max_amount_per_daily_window', { precision: 78, scale: 0 }).notNull(),
+    dailyWindowSeconds: integer('daily_window_seconds').notNull().default(86400),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('guardian_policies_scope_idx').on(table.userId, table.assetIdentifier, table.networkIdentifier),
+    index('guardian_policies_active_idx').on(table.isActive),
+  ]
+);
+
+// 10e. Spending Reservations (Phase 4: Atomic concurrency-safe budget reservations)
+export const spendingReservations = pgTable(
+  'spending_reservations',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => profiles.id, { onDelete: 'cascade' }),
+    purchaseIntentId: uuid('purchase_intent_id')
+      .notNull()
+      .references(() => purchaseIntents.id, { onDelete: 'cascade' }),
+    paymentExecutionId: uuid('payment_execution_id')
+      .references(() => paymentExecutions.id, { onDelete: 'cascade' }),
+    policyId: uuid('policy_id')
+      .notNull()
+      .references(() => guardianPolicies.id, { onDelete: 'restrict' }),
+    policyVersion: integer('policy_version').notNull().default(1),
+    assetIdentifier: text('asset_identifier').notNull().default('USDC'),
+    networkIdentifier: text('network_identifier').notNull().default('eip155:84532'),
+    amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
+    reservationStatus: text('reservation_status').notNull().default('RESERVED'), // 'RESERVED' | 'COMMITTED' | 'RELEASED'
+    taskId: text('task_id'),
+    windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull(),
+    windowExpiresAt: timestamp('window_expires_at', { withTimezone: true }).notNull(),
+    releaseReason: text('release_reason'),
+    committedAt: timestamp('committed_at', { withTimezone: true }),
+    releasedAt: timestamp('released_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('spending_reservations_execution_active_idx')
+      .on(table.paymentExecutionId)
+      .where(sql`reservation_status IN ('RESERVED', 'COMMITTED')`),
+    uniqueIndex('spending_reservations_intent_active_idx')
+      .on(table.purchaseIntentId)
+      .where(sql`reservation_status IN ('RESERVED', 'COMMITTED')`),
+    index('spending_reservations_user_window_idx')
+      .on(table.userId, table.assetIdentifier, table.networkIdentifier, table.reservationStatus, table.windowStartedAt),
+    index('spending_reservations_task_idx')
+      .on(table.taskId, table.reservationStatus),
   ]
 );
 
@@ -396,6 +484,9 @@ export const profilesRelations = relations(profiles, ({ many }) => ({
   purchaseIntents: many(purchaseIntents),
   approvalSnapshots: many(approvalSnapshots),
   auditEvents: many(auditEvents),
+  guardianDecisions: many(guardianDecisions),
+  spendingReservations: many(spendingReservations),
+  guardianPolicies: many(guardianPolicies),
 }));
 
 export const conversationsRelations = relations(conversations, ({ one, many }) => ({
@@ -522,5 +613,55 @@ export const mockMerchantResourcesRelations = relations(mockMerchantResources, (
   merchant: one(merchants, {
     fields: [mockMerchantResources.merchantId],
     references: [merchants.id],
+  }),
+}));
+
+export const guardianPoliciesRelations = relations(guardianPolicies, ({ one, many }) => ({
+  user: one(profiles, {
+    fields: [guardianPolicies.userId],
+    references: [profiles.id],
+  }),
+  spendingReservations: many(spendingReservations),
+}));
+
+export const spendingReservationsRelations = relations(spendingReservations, ({ one }) => ({
+  user: one(profiles, {
+    fields: [spendingReservations.userId],
+    references: [profiles.id],
+  }),
+  purchaseIntent: one(purchaseIntents, {
+    fields: [spendingReservations.purchaseIntentId],
+    references: [purchaseIntents.id],
+  }),
+  paymentExecution: one(paymentExecutions, {
+    fields: [spendingReservations.paymentExecutionId],
+    references: [paymentExecutions.id],
+  }),
+  policy: one(guardianPolicies, {
+    fields: [spendingReservations.policyId],
+    references: [guardianPolicies.id],
+  }),
+}));
+
+export const guardianDecisionsRelations = relations(guardianDecisions, ({ one }) => ({
+  purchaseIntent: one(purchaseIntents, {
+    fields: [guardianDecisions.purchaseIntentId],
+    references: [purchaseIntents.id],
+  }),
+  user: one(profiles, {
+    fields: [guardianDecisions.userId],
+    references: [profiles.id],
+  }),
+  approvalSnapshot: one(approvalSnapshots, {
+    fields: [guardianDecisions.approvalSnapshotId],
+    references: [approvalSnapshots.id],
+  }),
+  paymentExecution: one(paymentExecutions, {
+    fields: [guardianDecisions.paymentExecutionId],
+    references: [paymentExecutions.id],
+  }),
+  spendingReservation: one(spendingReservations, {
+    fields: [guardianDecisions.reservationId],
+    references: [spendingReservations.id],
   }),
 }));

@@ -14,7 +14,7 @@ import { SimulationSettlementEngine } from '../modules/payment-engine/simulation
 import { PaymentExecutionWorker } from '../modules/payment-engine/paymentExecutionWorker.js';
 import { setKillSwitch } from '../modules/payment-engine/killSwitch.js';
 import { paymentExecutions, settlementRecords, approvalSnapshots } from '@x402/database/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycle', () => {
   let app: FastifyInstance;
@@ -60,6 +60,9 @@ describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycl
     await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { authorization: `Bearer ${aliceToken}` } });
     await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { authorization: `Bearer ${bobToken}` } });
     await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { authorization: `Bearer ${adminToken}` } });
+
+    // Ensure clean spending reservations for test execution
+    await app.db.execute(sql`DELETE FROM spending_reservations WHERE user_id IN (${userAlice.userId}, ${userBob.userId})`);
 
     // Ensure kill switch is deactivated for test start
     setKillSwitch(false);

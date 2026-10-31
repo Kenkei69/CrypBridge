@@ -1,11 +1,13 @@
 import crypto from 'node:crypto';
-import { eq, and, or, lt, isNull } from 'drizzle-orm';
+import { eq, and, or, lt, isNull, sql } from 'drizzle-orm';
 import {
   AppError,
   encodeX402Header,
   decodeX402Header,
   PHASE3_PINNED_EXECUTION,
   type X402V2SettlementResponse,
+  type ExecutionPermit,
+  type SpendingReservation,
 } from '@x402/shared';
 import {
   paymentExecutions,
@@ -15,7 +17,8 @@ import {
   mockMerchantResources,
 } from '@x402/database/schema';
 import { recordAuditEvent } from '../audit/auditService.js';
-import { evaluateAuthorizationGate } from './authorizationGate.js';
+import { GuardianEngine } from '../guardian/guardianEngine.js';
+import { commitSpendingReservation, releaseSpendingReservation } from '../guardian/reservationService.js';
 import { parseAndValidatePaymentRequirements } from './requirementsParser.js';
 import { ConstrainedSimulationSigner } from './constrainedSigner.js';
 import { MockMerchantService, type MockMerchantRequest } from '../mock-merchant/mockMerchantService.js';
@@ -25,27 +28,39 @@ export interface ProcessExecutionOptions {
   workerId?: string;
   leaseDurationMs?: number;
   mockMerchantFault?: MockMerchantRequest['faultInjection'];
+  simulateTamperedAmount?: string;
+  simulateTamperedRecipient?: string;
+  simulateStaleWorkerFencingToken?: boolean;
 }
 
 export interface ExecutionRunResult {
   executionId: string;
   executionStatus: string;
   fulfillmentStatus: string;
+  fencingToken?: number;
+  permitId?: string | null;
+  guardianDecisionId?: string | null;
+  spendingReservationId?: string | null;
   settlementReference?: string | null;
   deliveredResource?: any;
+  failureCode?: string | null;
   failureReason?: string | null;
   reconciliationPending?: boolean;
 }
 
 /**
- * Payment Execution Worker for Phase 3.
+ * Payment Execution Worker for Phase 4.
  *
- * Implements a durable, atomic, lease-bounded state machine:
+ * Implements a durable, atomic, fencing-token-bounded state machine:
  * QUEUED -> VALIDATING -> SIMULATING_AUTHORIZATION -> SETTLING_SIMULATION -> SIMULATION_COMPLETED (or BLOCKED / FAILED / RECONCILIATION_REQUIRED).
+ *
+ * Every payment passes through Guardian deterministic policy & atomic budget reservation gates.
+ * Worker mutations enforce monotonically increasing fencing tokens.
  */
 export class PaymentExecutionWorker {
   private readonly db: any;
   private readonly appEnv: string;
+  private readonly guardianEngine: GuardianEngine;
   private readonly constrainedSigner: ConstrainedSimulationSigner;
   private readonly mockMerchant: MockMerchantService;
   private readonly settlementEngine: SimulationSettlementEngine;
@@ -53,38 +68,52 @@ export class PaymentExecutionWorker {
   constructor(db: any, appEnv = 'development') {
     this.db = db;
     this.appEnv = appEnv;
+    this.guardianEngine = new GuardianEngine(db, appEnv);
     this.constrainedSigner = new ConstrainedSimulationSigner(appEnv);
     this.mockMerchant = new MockMerchantService(db, appEnv);
     this.settlementEngine = new SimulationSettlementEngine(db, appEnv);
   }
 
   /**
-   * Helper to ensure execution updates only succeed if this worker still holds the lease.
-   * If a lease expired and was claimed by another worker, this will safely fail with WORKER_LEASE_LOST
-   * rather than overwriting newer state.
+   * Helper to ensure execution updates only succeed if this worker still holds the valid lease
+   * and current monotonic fencing token. If superseded or expired, safely aborts with STALE_WORKER_FENCING_TOKEN.
    */
   private async updateExecutionWithLease(
     executionId: string,
     workerId: string,
-    updateData: Record<string, any>
+    fencingTokenOrData: number | Record<string, any>,
+    maybeUpdateData?: Record<string, any>
   ): Promise<any> {
+    let fencingToken: number | undefined;
+    let updateData: Record<string, any>;
+
+    if (typeof fencingTokenOrData === 'number') {
+      fencingToken = fencingTokenOrData;
+      updateData = maybeUpdateData || {};
+    } else {
+      updateData = fencingTokenOrData;
+    }
+
+    const conditions = [
+      eq(paymentExecutions.id, executionId),
+      eq(paymentExecutions.workerId, workerId),
+    ];
+    if (fencingToken !== undefined) {
+      conditions.push(eq(paymentExecutions.fencingToken, fencingToken));
+    }
+
     const [updated] = await this.db
       .update(paymentExecutions)
       .set({
         ...updateData,
         updatedAt: new Date(),
       })
-      .where(
-        and(
-          eq(paymentExecutions.id, executionId),
-          eq(paymentExecutions.workerId, workerId)
-        )
-      )
+      .where(and(...conditions))
       .returning();
 
     if (!updated) {
       throw AppError.conflict(
-        `Worker lease lost or reassigned to another worker for execution ${executionId}. Operation aborted to preserve execution state integrity.`,
+        `Worker lease lost or superseded by newer generation (worker: ${workerId}${fencingToken !== undefined ? ', fencingToken: ' + fencingToken : ''}) for execution ${executionId}. Operation aborted to preserve execution state integrity.`,
         'WORKER_LEASE_LOST'
       );
     }
@@ -92,7 +121,7 @@ export class PaymentExecutionWorker {
   }
 
   /**
-   * Processes a single payment execution record through the Phase 3 lifecycle.
+   * Processes a single payment execution record through the Phase 4 lifecycle.
    */
   async processExecution(
     executionId: string,
@@ -103,13 +132,13 @@ export class PaymentExecutionWorker {
     const now = new Date();
     const leaseExpiresAt = new Date(now.getTime() + leaseMs);
 
-    // 1. Atomic Lease Claim: Acquire lock on the execution record
-    // Only claim if unleased or previous lease expired, and not already completed/canceled
+    // 1. Atomic Lease Claim: Acquire lock on the execution record and increment fencing token
     const claimedList = await this.db
       .update(paymentExecutions)
       .set({
         workerId,
         workerLeaseExpiresAt: leaseExpiresAt,
+        fencingToken: sql`${paymentExecutions.fencingToken} + 1`,
         updatedAt: now,
       })
       .where(
@@ -147,14 +176,23 @@ export class PaymentExecutionWorker {
         executionId: existing.id,
         executionStatus: existing.executionStatus,
         fulfillmentStatus: existing.fulfillmentStatus,
+        fencingToken: existing.fencingToken,
+        permitId: existing.permitId,
+        guardianDecisionId: existing.guardianDecisionId,
+        spendingReservationId: existing.spendingReservationId,
         settlementReference: existing.settlementReference,
         deliveredResource: existing.deliveredResource,
+        failureCode: existing.failureCode,
         failureReason: existing.failureReason,
         reconciliationPending: existing.executionStatus === 'RECONCILIATION_REQUIRED',
       };
     }
 
     const execution = claimedList[0];
+    const fencingToken = execution.fencingToken;
+
+    let activeReservation: SpendingReservation | undefined;
+    let activePermit: ExecutionPermit | undefined;
 
     try {
       // 2. Fetch related entities
@@ -193,7 +231,11 @@ export class PaymentExecutionWorker {
         );
 
         if (reconciliationResult.settled) {
-          // Settlement was completed on the adapter! Fetch resource and complete.
+          // Settlement was completed on the adapter! Commit reservation if present
+          if (execution.spendingReservationId) {
+            await commitSpendingReservation(this.db, execution.spendingReservationId, execution.id);
+          }
+
           const resId = execution.resourceId || 'res_gpu_h100_compute';
           const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(resId);
           const whereClause = isUuid
@@ -229,7 +271,7 @@ export class PaymentExecutionWorker {
               }
             : null;
 
-          const updated = await this.updateExecutionWithLease(execution.id, workerId, {
+          const updated = await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
             executionStatus: 'SIMULATION_COMPLETED',
             fulfillmentStatus: deliveredResource ? 'DELIVERED' : 'DELIVERY_FAILED',
             settlementReference: reconciliationResult.settlementReference,
@@ -247,6 +289,7 @@ export class PaymentExecutionWorker {
             payload: {
               reconciled: true,
               settlementReference: reconciliationResult.settlementReference,
+              spendingReservationCommitted: !!execution.spendingReservationId,
             },
           });
 
@@ -254,6 +297,7 @@ export class PaymentExecutionWorker {
             executionId: updated.id,
             executionStatus: updated.executionStatus,
             fulfillmentStatus: updated.fulfillmentStatus,
+            fencingToken,
             settlementReference: updated.settlementReference,
             deliveredResource: updated.deliveredResource,
           };
@@ -263,25 +307,37 @@ export class PaymentExecutionWorker {
             executionId: execution.id,
             executionStatus: 'RECONCILIATION_REQUIRED',
             fulfillmentStatus: execution.fulfillmentStatus,
+            fencingToken,
             reconciliationPending: true,
             failureReason: 'Settlement status pending confirmation from simulation ledger',
           };
         }
       }
 
-      // 4. State: VALIDATING - Run Authorization Gate
-      await this.updateExecutionWithLease(execution.id, workerId, {
+      // 4. State: VALIDATING - Run Blue Team Guardian Gate & Budget Reservation
+      await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
         executionStatus: 'VALIDATING',
       });
 
-      const gateDecision = evaluateAuthorizationGate(
-        {
-          userId: execution.userId,
-          intent,
-          snapshot,
-        },
-        this.appEnv
-      );
+      const proposedPayment = {
+        amount: options?.simulateTamperedAmount || execution.amount,
+        recipientAddress: options?.simulateTamperedRecipient || execution.recipientAddress,
+        networkIdentifier: execution.networkIdentifier,
+        assetIdentifier: execution.assetIdentifier,
+        scheme: 'exact',
+      };
+
+      const guardianGate = await this.guardianEngine.evaluateAndAuthorize({
+        userId: execution.userId,
+        intent,
+        snapshot,
+        paymentExecutionId: execution.id,
+        fencingToken,
+        taskId: execution.purchaseIntentId,
+        proposedPayment,
+        now,
+        appEnv: this.appEnv,
+      });
 
       await recordAuditEvent(this.db, {
         userId: execution.userId,
@@ -290,18 +346,21 @@ export class PaymentExecutionWorker {
         resourceType: 'payment_execution',
         resourceId: execution.id,
         payload: {
-          allowed: gateDecision.allowed,
-          reasonCode: gateDecision.reasonCode,
-          message: gateDecision.message,
+          allowed: guardianGate.allowed,
+          outcome: guardianGate.outcome,
+          reasonCode: guardianGate.reasonCode,
+          decisionId: guardianGate.decision.id,
+          fencingToken,
         },
       });
 
-      if (!gateDecision.allowed) {
+      if (!guardianGate.allowed) {
         // Block execution
-        const blocked = await this.updateExecutionWithLease(execution.id, workerId, {
+        const blocked = await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
           executionStatus: 'BLOCKED',
-          failureCode: gateDecision.reasonCode,
-          failureReason: gateDecision.message,
+          failureCode: guardianGate.reasonCode,
+          failureReason: guardianGate.reason,
+          guardianDecisionId: guardianGate.decision.id,
           workerLeaseExpiresAt: null,
         });
 
@@ -312,8 +371,9 @@ export class PaymentExecutionWorker {
           resourceType: 'payment_execution',
           resourceId: execution.id,
           payload: {
-            reasonCode: gateDecision.reasonCode,
-            failureReason: gateDecision.message,
+            reasonCode: guardianGate.reasonCode,
+            failureReason: guardianGate.reason,
+            decisionId: guardianGate.decision.id,
           },
         });
 
@@ -321,13 +381,22 @@ export class PaymentExecutionWorker {
           executionId: blocked.id,
           executionStatus: blocked.executionStatus,
           fulfillmentStatus: blocked.fulfillmentStatus,
+          fencingToken,
+          guardianDecisionId: guardianGate.decision.id,
+          failureCode: blocked.failureCode,
           failureReason: blocked.failureReason,
         };
       }
 
+      activePermit = guardianGate.permit;
+      activeReservation = guardianGate.reservation;
+
       // 5. State: SIMULATING_AUTHORIZATION - Request requirements from Mock Merchant
-      await this.updateExecutionWithLease(execution.id, workerId, {
+      await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
         executionStatus: 'SIMULATING_AUTHORIZATION',
+        permitId: activePermit?.permitId || null,
+        guardianDecisionId: guardianGate.decision.id,
+        spendingReservationId: activeReservation?.id || null,
       });
 
       const initialMerchantResp = await this.mockMerchant.handleResourceRequest({
@@ -355,8 +424,12 @@ export class PaymentExecutionWorker {
           resourceId,
         });
       } catch (parseErr) {
-        // Requirements validation failed
-        const blocked = await this.updateExecutionWithLease(execution.id, workerId, {
+        // Requirements validation failed -> safely release budget reservation
+        if (activeReservation) {
+          await releaseSpendingReservation(this.db, activeReservation.id, 'REQUIREMENTS_MISMATCH');
+        }
+
+        const blocked = await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
           executionStatus: 'BLOCKED',
           failureCode: 'REQUIREMENTS_MISMATCH',
           failureReason: (parseErr as Error).message,
@@ -372,6 +445,7 @@ export class PaymentExecutionWorker {
           payload: {
             reasonCode: 'REQUIREMENTS_MISMATCH',
             failureReason: (parseErr as Error).message,
+            reservationReleased: !!activeReservation,
           },
         });
 
@@ -379,6 +453,8 @@ export class PaymentExecutionWorker {
           executionId: blocked.id,
           executionStatus: blocked.executionStatus,
           fulfillmentStatus: blocked.fulfillmentStatus,
+          fencingToken,
+          failureCode: 'REQUIREMENTS_MISMATCH',
           failureReason: blocked.failureReason,
         };
       }
@@ -398,17 +474,39 @@ export class PaymentExecutionWorker {
       });
 
       // 6. Constrained Simulation Signer: Independent Validation and Signing
-      const signingResult = await this.constrainedSigner.signSimulationAuthorization({
+      // Stale worker test injection support
+      const effectiveFencingToken = options?.simulateStaleWorkerFencingToken
+        ? fencingToken + 999
+        : fencingToken;
+
+      const signingParams: {
+        executionId: string;
+        snapshot: any;
+        intent: any;
+        requirementItem: any;
+        permit?: ExecutionPermit | undefined;
+        fencingToken: number;
+        requirePermit: boolean;
+        db: any;
+        resourceId: string;
+        resourceUrl?: string | undefined;
+      } = {
         executionId: execution.id,
         snapshot,
         intent,
         requirementItem: parsedRequirements.matchedRequirement,
+        fencingToken: effectiveFencingToken,
+        requirePermit: true,
+        db: this.db,
         resourceId,
-        resourceUrl: parsedRequirements.resource.url,
-      });
+      };
+      if (activePermit) signingParams.permit = activePermit;
+      if (parsedRequirements.resource.url) signingParams.resourceUrl = parsedRequirements.resource.url;
+
+      const signingResult = await this.constrainedSigner.signSimulationAuthorization(signingParams);
 
       // Persist authorizationId
-      await this.updateExecutionWithLease(execution.id, workerId, {
+      await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
         authorizationId: signingResult.authorizationId,
         executionStatus: 'SETTLING_SIMULATION',
       });
@@ -422,20 +520,26 @@ export class PaymentExecutionWorker {
         payload: {
           authorizationId: signingResult.authorizationId,
           snapshotId: snapshot.id,
+          permitId: activePermit?.permitId,
+          fencingToken,
         },
       });
 
-      // Pre-settlement lease verification: confirm worker still holds valid lease before initiating settlement
+      // Pre-settlement lease verification: confirm worker still holds valid lease and fencing token
       const [preSettlementRecord] = await this.db
         .select()
         .from(paymentExecutions)
         .where(eq(paymentExecutions.id, execution.id))
         .limit(1);
 
-      if (!preSettlementRecord || preSettlementRecord.workerId !== workerId) {
+      if (
+        !preSettlementRecord ||
+        preSettlementRecord.workerId !== workerId ||
+        preSettlementRecord.fencingToken !== fencingToken
+      ) {
         throw AppError.conflict(
-          'Worker lease lost or reassigned prior to settlement submission. Settlement aborted to prevent duplicate settlement.',
-          'WORKER_LEASE_LOST'
+          'Worker lease lost or superseded prior to settlement submission. Settlement aborted to prevent duplicate settlement.',
+          'STALE_WORKER_FENCING_TOKEN'
         );
       }
 
@@ -451,7 +555,8 @@ export class PaymentExecutionWorker {
         });
       } catch (networkOrTimeoutErr) {
         // Network timeout or lost response scenario -> Enter RECONCILIATION_REQUIRED
-        const reconcileReq = await this.updateExecutionWithLease(execution.id, workerId, {
+        // Invariant: Reservation remains RESERVED (held until reconciled)
+        const reconcileReq = await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
           executionStatus: 'RECONCILIATION_REQUIRED',
           failureReason: (networkOrTimeoutErr as Error).message,
           lastReconciledAt: new Date(),
@@ -467,6 +572,7 @@ export class PaymentExecutionWorker {
           resourceId: execution.id,
           payload: {
             reason: (networkOrTimeoutErr as Error).message,
+            reservationStatus: 'RESERVED_HELD',
           },
         });
 
@@ -474,6 +580,7 @@ export class PaymentExecutionWorker {
           executionId: reconcileReq.id,
           executionStatus: 'RECONCILIATION_REQUIRED',
           fulfillmentStatus: reconcileReq.fulfillmentStatus,
+          fencingToken,
           reconciliationPending: true,
           failureReason: reconcileReq.failureReason,
         };
@@ -482,6 +589,11 @@ export class PaymentExecutionWorker {
       // 8. Handle Merchant Response
       if (merchantSettlementResp.status === 200) {
         // Simulation settled and resource delivered successfully!
+        // Invariant: Commit spending reservation upon successful settlement
+        if (activeReservation) {
+          await commitSpendingReservation(this.db, activeReservation.id, execution.id);
+        }
+
         const paymentRespHeader = merchantSettlementResp.headers['payment-response'];
         let settlementRef = `sim_settlement_${signingResult.authorizationId}`;
         if (paymentRespHeader) {
@@ -495,7 +607,7 @@ export class PaymentExecutionWorker {
           }
         }
 
-        const completed = await this.updateExecutionWithLease(execution.id, workerId, {
+        const completed = await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
           executionStatus: 'SIMULATION_COMPLETED',
           fulfillmentStatus: 'DELIVERED',
           settlementReference: settlementRef,
@@ -513,6 +625,7 @@ export class PaymentExecutionWorker {
             settlementReference: settlementRef,
             amount: snapshot.exactAmount,
             network: snapshot.networkIdentifier,
+            reservationCommitted: !!activeReservation,
           },
         });
 
@@ -531,6 +644,7 @@ export class PaymentExecutionWorker {
           executionId: completed.id,
           executionStatus: completed.executionStatus,
           fulfillmentStatus: completed.fulfillmentStatus,
+          fencingToken,
           settlementReference: completed.settlementReference,
           deliveredResource: completed.deliveredResource,
         };
@@ -538,8 +652,13 @@ export class PaymentExecutionWorker {
 
       // Check if simulation was settled, but resource delivery failed
       if (merchantSettlementResp.body?.settled) {
+        // Invariant: Commit spending reservation because payment settled on the ledger!
+        if (activeReservation) {
+          await commitSpendingReservation(this.db, activeReservation.id, execution.id);
+        }
+
         const settlementRef = merchantSettlementResp.body.settlementReference || `sim_settlement_${signingResult.authorizationId}`;
-        const delivFailed = await this.updateExecutionWithLease(execution.id, workerId, {
+        const delivFailed = await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
           executionStatus: 'SIMULATION_COMPLETED',
           fulfillmentStatus: 'DELIVERY_FAILED',
           settlementReference: settlementRef,
@@ -555,6 +674,7 @@ export class PaymentExecutionWorker {
           resourceId: execution.id,
           payload: {
             error: merchantSettlementResp.body.error,
+            reservationCommitted: !!activeReservation,
           },
         });
 
@@ -562,14 +682,20 @@ export class PaymentExecutionWorker {
           executionId: delivFailed.id,
           executionStatus: delivFailed.executionStatus,
           fulfillmentStatus: delivFailed.fulfillmentStatus,
+          fencingToken,
           settlementReference: delivFailed.settlementReference,
           failureReason: delivFailed.failureReason,
         };
       }
 
-      // Otherwise: Definitive failure
+      // Otherwise: Definitive failure / settlement rejected
+      // Invariant: Release spending reservation safely
       const failureMsg = merchantSettlementResp.body?.error || merchantSettlementResp.body?.details || 'Payment settlement rejected';
-      const failed = await this.updateExecutionWithLease(execution.id, workerId, {
+      if (activeReservation) {
+        await releaseSpendingReservation(this.db, activeReservation.id, failureMsg);
+      }
+
+      const failed = await this.updateExecutionWithLease(execution.id, workerId, fencingToken, {
         executionStatus: 'FAILED',
         failureCode: 'SETTLEMENT_REJECTED',
         failureReason: failureMsg,
@@ -584,6 +710,7 @@ export class PaymentExecutionWorker {
         resourceId: execution.id,
         payload: {
           failureReason: failureMsg,
+          reservationReleased: !!activeReservation,
         },
       });
 
@@ -591,10 +718,12 @@ export class PaymentExecutionWorker {
         executionId: failed.id,
         executionStatus: failed.executionStatus,
         fulfillmentStatus: failed.fulfillmentStatus,
+        fencingToken,
+        failureCode: failed.failureCode,
         failureReason: failed.failureReason,
       };
     } catch (unexpectedErr) {
-      // Clear lease on unhandled exception ONLY if this worker still holds the lease
+      // Clear lease on unhandled exception ONLY if this worker still holds the lease and fencing token
       await this.db
         .update(paymentExecutions)
         .set({
@@ -604,7 +733,8 @@ export class PaymentExecutionWorker {
         .where(
           and(
             eq(paymentExecutions.id, execution.id),
-            eq(paymentExecutions.workerId, workerId)
+            eq(paymentExecutions.workerId, workerId),
+            eq(paymentExecutions.fencingToken, fencingToken)
           )
         );
 
@@ -690,6 +820,7 @@ export class PaymentExecutionWorker {
           executionId: updated.id,
           executionStatus: updated.executionStatus,
           fulfillmentStatus: updated.fulfillmentStatus,
+          fencingToken: updated.fencingToken,
           settlementReference: updated.settlementReference,
           deliveredResource: updated.deliveredResource,
         };

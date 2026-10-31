@@ -1,38 +1,38 @@
-# x402 Guardian — Architecture Specification (Phase 2)
+# x402 Guardian — Architecture Specification (Phase 4)
 
 ## 1. System Overview
 
-x402 Guardian protects AI-assisted purchases by checking proposed payments against trusted user authorizations before any signing or blockchain settlement occurs.
+x402 Guardian protects AI-assisted purchases by checking proposed payments against trusted user authorizations and spending policies before any signing or blockchain settlement occurs.
 
-In modern AI agent ecosystems, language models generate purchase suggestions, invoke tool calls, and interact with merchant APIs. However, models are untrusted entities susceptible to prompt injection, hallucinations, and drainer attacks. x402 Guardian enforces strict cryptographic and domain boundaries so that spending authority remains exclusively with authenticated human users.
+In modern AI agent ecosystems, language models generate purchase suggestions, invoke tool calls, and interact with merchant APIs. However, models are untrusted entities susceptible to prompt injection, hallucinations, and drainer attacks. x402 Guardian enforces strict cryptographic, policy, and domain boundaries so that spending authority remains exclusively with authenticated human users.
 
 ```mermaid
 flowchart TD
     subgraph ClientLayer ["Client & Untrusted Agents"]
-        UI["Next.js Web UI\n(Safe Content Rendering & Compact Approval Card)"]
+        UI["Next.js Web UI\n(Safe Content Rendering, Compact Approval Card & Budget Meter)"]
         Agent["AI Purchasing Assistant\n(DeterministicDemoAdapter & Untrusted LLM Output)"]
     end
 
     subgraph APIGateway ["Fastify API Gateway"]
-        AuthMid["JWT Auth & Identity Derivation\n(Token sub -> request.user)"]
+        AuthMid["JWT Auth & Identity Derivation\n(Token sub -> request.user, app.requireAdmin)"]
         CorsRL["CORS & Rate Limiter\n(Allowed Origins Policy)"]
         ErrCorr["Correlation ID & Centralized Error Handler"]
         RedactLog["Pino Redacted Structured Logger"]
     end
 
-    subgraph CoreModules ["Modular Backend Services"]
-        HealthMod["Health & Readiness Check\n(/live, /ready)"]
-        CatalogMod["Authoritative Catalog & Payment Options\n(Seeded Products, Options & Merchants)"]
-        ConvMod["Conversations & Assistant Replies\n(User Isolated, Prompt-Injection Defended)"]
-        PurchaseMod["Purchase Intents & Approval Lifecycle\n(FOR UPDATE Locks, Optimistic Versioning)"]
-        AuditMod["Append-Only Audit Ledger"]
+    subgraph GuardianEngineSub ["Blue Team Guardian Domain"]
+        GuardEngine["GuardianEngine\n(Orchestration & Decision Flow)"]
+        PolicyEval["PolicyEvaluator\n(Pure Deterministic Checks)"]
+        ResService["ReservationService\n(Atomic Row Locks, Daily Spending Windows)"]
+        AuthService["AuthorizationService\n(Cryptographic Execution Permits)"]
+        DecRepo["DecisionRepository\n(Append-Only Explainable Ledger)"]
     end
 
-    subgraph IntegrationBoundaries ["Phase 1 & Future Boundaries"]
-        DestPol["ControlledDestinationPolicy\n(SSRF Blocklist)"]
-        GuardEngine["IGuardianEvaluationEngine\n(Rule Matrix)"]
-        Signer["IPaymentSigner\n(Simulation Only)"]
-        Settlement["ISettlementAdapter\n(Simulation Only)"]
+    subgraph PaymentEngineSub ["Payment Execution & Signer"]
+        Worker["PaymentExecutionWorker\n(Durable Queue, Fencing Lease Token #N)"]
+        Signer["ConstrainedSimulationSigner\n(Independent Permit & Reservation Verification)"]
+        MockMerch["MockMerchantService\n(x402 V2 HTTP 402/200 Challenge-Response)"]
+        Settlement["SimulationSettlementEngine\n(Ledger Uniqueness & Reconciliation)"]
     end
 
     subgraph DatabaseLayer ["PostgreSQL Database"]
@@ -41,7 +41,10 @@ flowchart TD
         CatalogTbl[("merchants, products & product_payment_options")]
         IntentsTbl[("purchase_intents (versioned)")]
         SnapshotsTbl[("approval_snapshots (Immutable)")]
-        DecisionsTbl[("guardian_decisions")]
+        ExecutionsTbl[("payment_executions (fencing_token, permit_id)")]
+        PoliciesTbl[("guardian_policies (versioned)")]
+        ReservationsTbl[("spending_reservations (RESERVED -> COMMITTED -> RELEASED)")]
+        DecisionsTbl[("guardian_decisions (rules_evaluated, canonical_terms)")]
         AuditTbl[("audit_events (Append-Only)")]
         RLSPolicy["PostgreSQL Row Level Security (RLS)"]
     end
@@ -49,12 +52,19 @@ flowchart TD
     UI --> CorsRL
     Agent --> CorsRL
     CorsRL --> AuthMid
-    AuthMid --> CoreModules
-    CoreModules --> DatabaseLayer
-    PurchaseMod -.-> GuardEngine
-    GuardEngine -.-> Signer
-    Signer -.-> Settlement
-    CoreModules --> DestPol
+    AuthMid --> Worker
+    Worker --> GuardEngine
+    GuardEngine --> PolicyEval
+    GuardEngine --> ResService
+    GuardEngine --> AuthService
+    GuardEngine --> DecRepo
+    GuardEngine --> DecisionsTbl
+    ResService --> ReservationsTbl
+    Worker --> Signer
+    Signer --> MockMerch
+    MockMerch --> Settlement
+    Settlement --> DatabaseLayer
+    AuthMid --> DatabaseLayer
 ```
 
 ---
@@ -269,3 +279,38 @@ stateDiagram-v2
 8. **Historical Approval Execution Boundary**:
    - Historical Phase 2 approvals do not execute automatically behind the user's back.
    - Settle/execution requires a dedicated explicit user request via `POST /api/v1/purchases/intents/:id/execute`. Re-approving an already approved intent remains strictly idempotent without triggering payment.
+
+---
+
+## 9. Phase 4 Blue Team Guardian Architecture
+
+Phase 4 introduces a dedicated, typed Guardian domain that enforces deterministic zero-loss boundaries between user approvals and the simulation signer:
+
+1. **Pure Policy Evaluator (`policyEvaluator.ts`)**:
+   - Pure, deterministic evaluation function (`evaluateGuardianPolicy`) with zero side effects.
+   - Validates ownership, approval expiration, status, exact parameter equality, pinned network allowlist (`eip155:84532`), pinned asset allowlist (USDC), and exact scheme.
+   - Returns explicit `ALLOW` or `BLOCK` outcome, risk score, and detailed rule telemetry.
+
+2. **Atomic Spending Reservations (`reservationService.ts`)**:
+   - Manages versioned spending policies with integer limits (`maxAmountPerPayment`, `maxAmountPerTask`, `maxAmountPerDailyWindow`).
+   - Concurrency protection: acquires row-level `SELECT ... FOR UPDATE` locks on the user's policy row inside a PostgreSQL transaction.
+   - Strict reservation lifecycle: `RESERVED` -> `COMMITTED` -> `RELEASED`.
+   - Window accounting: resets daily at `00:00:00 UTC`. Delivery failure or in-flight settlement holds the reservation until reconciled.
+
+3. **Cryptographic Execution Permits (`authorizationService.ts`)**:
+   - ALLOW decisions issue an `ExecutionPermit` with a server-side HMAC-SHA256 signature binding the approval snapshot, intent version, amount, recipient, policy version, reservation ID, and worker fencing token.
+   - The simulation signer independently validates this HMAC permit before creating authorization signatures. Bare booleans or untrusted decision IDs are rejected.
+
+4. **Worker Lease Fencing Tokens (`paymentExecutionWorker.ts`)**:
+   - Increments a monotonically increasing `fencing_token` on each worker lease acquisition.
+   - All state mutations require `WHERE id = :id AND fencing_token = :fencingToken`.
+   - Superseded or stale workers are aborted with HTTP 409 `STALE_WORKER_FENCING_TOKEN`.
+
+5. **Explainable Decision Persistence (`decisionRepository.ts`)**:
+   - Every Guardian evaluation is persisted to an append-only `guardian_decisions` table.
+   - Records correlation ID, structured check breakdown (PASS/FAIL per rule), risk score, and canonical terms.
+   - Filterable by outcome (`ALL`, `ALLOW`, `BLOCK`) with strict user tenant isolation.
+
+6. **Hardened Administrator Authorization (`auth/index.ts`)**:
+   - Profile update endpoints reject client-provided role fields, preventing self-elevation of admin privileges.
+   - Administrative endpoints (`PUT /api/v1/admin/guardian/policy`, `POST /api/v1/admin/kill-switch`) require verified server tokens with `role === 'admin'`.

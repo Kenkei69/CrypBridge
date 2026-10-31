@@ -59,6 +59,56 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  // PATCH /api/v1/auth/profile - User profile update (Role changes strictly prohibited)
+  app.patch(
+    '/api/v1/auth/profile',
+    { preHandler: [app.authenticate] },
+    async (request: FastifyRequest) => {
+      const authUser = request.user;
+      const body = (request.body as Record<string, unknown>) || {};
+
+      // Security Check: Privileges cannot be self-assigned or escalated via user profile updates
+      // Any attempt to submit a 'role' or administrative field is rejected/ignored.
+      const updateData: { displayName?: string; updatedAt: Date } = {
+        updatedAt: new Date(),
+      };
+
+      if (typeof body.displayName === 'string' && body.displayName.trim().length > 0) {
+        updateData.displayName = body.displayName.trim().substring(0, 80);
+      }
+
+      const [updated] = await app.db
+        .update(profiles)
+        .set(updateData)
+        .where(eq(profiles.id, authUser.id))
+        .returning();
+
+      await recordAuditEvent(app.db, {
+        userId: authUser.id,
+        eventType: 'USER_PROFILE_UPDATED',
+        actorType: 'user',
+        resourceType: 'profile',
+        resourceId: authUser.id,
+        payload: {
+          updatedFields: Object.keys(updateData),
+          roleEscalationAttemptIgnored: 'role' in body,
+        },
+        ipAddress: request.ip || null,
+        userAgent: (request.headers['user-agent'] as string) || null,
+      });
+
+      return {
+        user: {
+          id: updated?.id || authUser.id,
+          email: updated?.email || authUser.email,
+          displayName: updated?.displayName || authUser.displayName,
+          role: authUser.role, // Derived strictly from verified server-issued JWT token, never from request body
+          updatedAt: updated?.updatedAt,
+        },
+      };
+    }
+  );
+
   // POST /api/v1/auth/test-token - TEST / DEV ONLY token generation endpoint
   app.post(
     '/api/v1/auth/test-token',

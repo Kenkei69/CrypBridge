@@ -13,6 +13,7 @@ import { conversationRoutes } from './modules/conversations/index.js';
 import { purchaseRoutes } from './modules/purchases/index.js';
 import { historyRoutes } from './modules/history/index.js';
 import { mockMerchantRoutes } from './modules/mock-merchant/index.js';
+import { guardianRoutes } from './modules/guardian/index.js';
 
 export async function buildApp(customConfig?: Partial<EnvConfig>): Promise<FastifyInstance> {
   const config = customConfig ? { ...getConfig(), ...customConfig } : getConfig();
@@ -100,6 +101,7 @@ export async function buildApp(customConfig?: Partial<EnvConfig>): Promise<Fasti
   await app.register(purchaseRoutes);
   await app.register(historyRoutes, { config });
   await app.register(mockMerchantRoutes);
+  await app.register(guardianRoutes);
 
   return app;
 }

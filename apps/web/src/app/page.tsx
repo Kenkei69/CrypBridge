@@ -15,6 +15,8 @@ import type {
   AuditEvent,
   ApprovalPreview,
   PaymentExecution,
+  UserBudgetSummary,
+  GuardianDecision,
 } from '@x402/shared';
 import { Shield, ShieldAlert, CheckCircle2, AlertOctagon } from 'lucide-react';
 
@@ -45,8 +47,10 @@ export default function Home() {
   const [activeExecution, setActiveExecution] = useState<PaymentExecution | null>(null);
   const [approvalLoading, setApprovalLoading] = useState(false);
 
-  // Security History
+  // Security History & Guardian Decisions
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [guardianDecisions, setGuardianDecisions] = useState<GuardianDecision[]>([]);
+  const [budgetSummary, setBudgetSummary] = useState<UserBudgetSummary | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [statusNotification, setStatusNotification] = useState<string | null>(null);
 
@@ -196,12 +200,36 @@ export default function Home() {
         setApprovalPreview(null);
       }
 
-      // History
+      // History & Audit Trail
       setHistoryLoading(true);
-      const historyRes = await apiFetch<{ history: { auditEvents: AuditEvent[] } }>('/api/v1/history', {
-        token,
-      });
-      setAuditEvents(historyRes.history?.auditEvents || []);
+      try {
+        const historyRes = await apiFetch<{ history: { auditEvents: AuditEvent[] } }>('/api/v1/history', {
+          token,
+        });
+        setAuditEvents(historyRes.history?.auditEvents || []);
+      } catch (e) {
+        console.error('Failed to load history:', e);
+      }
+
+      // Guardian Decisions
+      try {
+        const decisionsRes = await apiFetch<{ decisions: GuardianDecision[] }>('/api/v1/guardian/decisions?outcome=ALL&limit=30', {
+          token,
+        });
+        setGuardianDecisions(decisionsRes.decisions || []);
+      } catch (e) {
+        console.error('Failed to load guardian decisions:', e);
+      }
+
+      // Budget Summary
+      try {
+        const budgetRes = await apiFetch<{ budget: UserBudgetSummary }>('/api/v1/guardian/budget', {
+          token,
+        });
+        setBudgetSummary(budgetRes.budget || null);
+      } catch (e) {
+        console.error('Failed to load budget summary:', e);
+      }
     } catch (err) {
       console.error('Failed to load user-scoped data:', err);
     } finally {
@@ -528,6 +556,7 @@ export default function Home() {
           activeIntent={activeIntent}
           approvalPreview={approvalPreview}
           execution={activeExecution}
+          budget={budgetSummary}
           onSelectProduct={handleSelectProduct}
           onSelectOption={handleSelectOption}
           onApprove={handleApprove}
@@ -541,40 +570,42 @@ export default function Home() {
           <DraftIntentPanel intents={intents} loading={intentsLoading} />
           <SecurityHistoryPanel
             auditEvents={auditEvents}
+            guardianDecisions={guardianDecisions}
             simulationMode={true}
             loading={historyLoading}
+            onRefresh={loadUserData}
           />
         </div>
 
-        {/* Phase 3 Security Trust Boundaries Reference */}
+        {/* Phase 4 Blue Team Security Trust Boundaries Reference */}
         <div className="p-5 rounded-xl bg-surface/40 border border-gray-800/80 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-gray-300 uppercase tracking-wider">
             <ShieldAlert className="w-4 h-4 text-blue-400" />
-            <span>Phase 3 Verified Trust Boundaries</span>
+            <span>Phase 4 Verified Blue Team Trust Boundaries</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs text-gray-400">
             <div className="p-3 bg-gray-950/40 rounded-lg border border-gray-900 space-y-1">
-              <span className="font-semibold text-gray-200">1. AI Language Separation</span>
+              <span className="font-semibold text-gray-200">1. Deterministic Guardian Gate</span>
               <p>
-                Natural language generation cannot set prices, alter recipient addresses, or approve transactions. Model output is treated as untrusted suggestions.
+                Every proposed payment is checked against immutable approval and policy. Prompt content and LLM outputs cannot grant spending authority.
               </p>
             </div>
             <div className="p-3 bg-gray-950/40 rounded-lg border border-gray-900 space-y-1">
-              <span className="font-semibold text-gray-200">2. Authoritative Payment Options</span>
+              <span className="font-semibold text-gray-200">2. Atomic Budget Reservations</span>
               <p>
-                Asset, network, and base-unit amounts are bound to backend catalog records. Switching payment options increments version and invalidates earlier approvals.
+                Row-level locking enforces daily, task, and payment limits under concurrency. Reservations survive restarts and are retained on uncertain outcomes.
               </p>
             </div>
             <div className="p-3 bg-gray-950/40 rounded-lg border border-gray-900 space-y-1">
-              <span className="font-semibold text-gray-200">3. Immutable Approval Snapshot</span>
+              <span className="font-semibold text-gray-200">3. Cryptographic Execution Permits</span>
               <p>
-                Explicit user approval creates one immutable snapshot bound to the exact intent version. The snapshot acts as an authoritative firewall gate.
+                ALLOW decisions issue HMAC permits binding exact parameters and fencing tokens. Signer independently validates permits before signing.
               </p>
             </div>
             <div className="p-3 bg-gray-950/40 rounded-lg border border-gray-900 space-y-1">
-              <span className="font-semibold text-gray-200">4. Pinned x402 V2 Engine</span>
+              <span className="font-semibold text-gray-200">4. Worker Fencing & Zero-Loss</span>
               <p>
-                Strictly pinned to USDC on Base Sepolia (eip155:84532) exact scheme. Refuses all real funds, production operation, and live blockchain signing.
+                Monotonically increasing fencing tokens block stale workers from settling. Overpayment and altered recipients are rejected without settlement.
               </p>
             </div>
           </div>

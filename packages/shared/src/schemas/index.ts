@@ -138,3 +138,30 @@ export const X402V2PaymentPayloadSchema = z.object({
   }).optional(),
   extensions: z.record(z.unknown()).optional(),
 });
+
+export const SpendingPolicyUpdateSchema = z.object({
+  assetIdentifier: z.string().min(1).max(100).default('USDC'),
+  networkIdentifier: z.string().min(1).max(50).default('eip155:84532'),
+  maxAmountPerPayment: BaseUnitAmountSchema,
+  maxAmountPerTask: BaseUnitAmountSchema,
+  maxAmountPerDailyWindow: BaseUnitAmountSchema,
+  dailyWindowSeconds: z.number().int().min(60).max(604800).default(86400),
+  isActive: z.boolean().default(true),
+});
+
+export const GuardianDecisionQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+  outcome: z.enum(['ALLOW', 'BLOCK', 'ALL']).default('ALL'),
+  intentId: UuidSchema.optional(),
+  executionId: UuidSchema.optional(),
+});
+
+export const BudgetQuerySchema = z.object({
+  assetIdentifier: z.string().min(1).max(100).default('USDC'),
+  networkIdentifier: z.string().min(1).max(50).default('eip155:84532'),
+});
+
+export const UpdateUserProfileSchema = z.object({
+  displayName: z.string().trim().min(1).max(80).optional(),
+});

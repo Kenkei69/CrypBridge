@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import {
   AppError,
   PHASE3_PINNED_EXECUTION,
@@ -6,7 +7,11 @@ import {
   type PurchaseIntent,
   type X402V2PaymentPayload,
   type X402V2RequirementItem,
+  type ExecutionPermit,
 } from '@x402/shared';
+import { isKillSwitchActive, getKillSwitchStatus } from './killSwitch.js';
+import { verifyExecutionPermit } from '../guardian/authorizationService.js';
+import { spendingReservations, paymentExecutions } from '@x402/database/schema';
 
 // Server-side secret for simulated HMAC integrity token (never exposed to client)
 const SIMULATION_SIGNER_SECRET = process.env.SIMULATION_SIGNER_SECRET || 'x402_guardian_internal_sim_signer_secret_k92';
@@ -16,8 +21,12 @@ export interface ConstrainedSigningRequest {
   snapshot: ApprovalSnapshot;
   intent: PurchaseIntent;
   requirementItem: X402V2RequirementItem;
-  resourceId?: string;
-  resourceUrl?: string;
+  permit?: ExecutionPermit | undefined;
+  fencingToken?: number | undefined;
+  requirePermit?: boolean | undefined;
+  resourceId?: string | undefined;
+  resourceUrl?: string | undefined;
+  db?: any;
 }
 
 export interface ConstrainedSigningResult {
@@ -29,11 +38,11 @@ export interface ConstrainedSigningResult {
 }
 
 /**
- * Constrained Simulation Signer for Phase 3.
+ * Constrained Simulation Signer for Phase 4.
  *
- * Independently validates execution parameters against immutable server-side approval snapshots.
- * Generates an opaque, verifiable simulation authorization token.
- * Refuses execution in production environments.
+ * Independently validates execution parameters against immutable server-side approval snapshots
+ * and cryptographically verifies server-issued ExecutionPermits.
+ * Refuses execution in production environments or when kill-switch is active.
  */
 export class ConstrainedSimulationSigner {
   private readonly appEnv: string;
@@ -53,8 +62,91 @@ export class ConstrainedSimulationSigner {
       throw AppError.simulationForbidden('Cannot sign simulation authorization in production environment');
     }
 
-    const { executionId, snapshot, intent, requirementItem, resourceId, resourceUrl } = request;
+    if (isKillSwitchActive()) {
+      const ks = getKillSwitchStatus();
+      throw AppError.forbidden(`ConstrainedSigner: Emergency payment kill switch is active (${ks.reason})`);
+    }
+
+    const { executionId, snapshot, intent, requirementItem, permit, fencingToken, requirePermit, resourceId, resourceUrl, db } = request;
     const now = new Date();
+
+    // 0. Independent Execution Permit Verification (Phase 4 Guardian Enforcement)
+    if (requirePermit && !permit) {
+      throw AppError.badRequest('ConstrainedSigner: Missing required Guardian Execution Permit');
+    }
+
+    if (permit) {
+      // 0a. Verify HMAC-SHA256 signature and permit expiration
+      const permitVerification = verifyExecutionPermit(permit, now);
+      if (!permitVerification.valid) {
+        throw AppError.badRequest(
+          `ConstrainedSigner: Execution permit invalid: ${permitVerification.reason}`
+        );
+      }
+
+      // 0b. Verify permit execution and snapshot binding
+      if (permit.executionId !== executionId) {
+        throw AppError.badRequest(
+          `ConstrainedSigner: Permit execution binding mismatch (${permit.executionId} != ${executionId})`
+        );
+      }
+      if (permit.snapshotId !== snapshot.id) {
+        throw AppError.badRequest(
+          `ConstrainedSigner: Permit snapshot binding mismatch (${permit.snapshotId} != ${snapshot.id})`
+        );
+      }
+      if (permit.intentId !== intent.id) {
+        throw AppError.badRequest(
+          `ConstrainedSigner: Permit intent binding mismatch (${permit.intentId} != ${intent.id})`
+        );
+      }
+      if (BigInt(permit.amount) !== BigInt(requirementItem.amount)) {
+        throw AppError.badRequest(
+          `ConstrainedSigner: Permit amount mismatch (${permit.amount} != ${requirementItem.amount})`
+        );
+      }
+      if (permit.recipientAddress.toLowerCase() !== requirementItem.payTo.toLowerCase()) {
+        throw AppError.badRequest(
+          `ConstrainedSigner: Permit recipient mismatch (${permit.recipientAddress} != ${requirementItem.payTo})`
+        );
+      }
+
+      // 0c. Verify worker fencing token against permit if provided
+      if (fencingToken !== undefined && permit.fencingToken !== fencingToken) {
+        throw AppError.conflict(
+          `ConstrainedSigner: Worker fencing token mismatch. Permit has token ${permit.fencingToken}, current worker has ${fencingToken}`,
+          'STALE_WORKER_FENCING_TOKEN'
+        );
+      }
+
+      // 0d. Check active spending reservation and worker generation in DB if db instance provided
+      if (db) {
+        const [resRecord] = await db
+          .select()
+          .from(spendingReservations)
+          .where(eq(spendingReservations.id, permit.reservationId))
+          .limit(1);
+
+        if (!resRecord || (resRecord.reservationStatus !== 'RESERVED' && resRecord.reservationStatus !== 'COMMITTED')) {
+          throw AppError.badRequest(
+            `ConstrainedSigner: Spending reservation ${permit.reservationId} is not active (status: ${resRecord?.reservationStatus || 'NOT_FOUND'})`
+          );
+        }
+
+        const [execRecord] = await db
+          .select()
+          .from(paymentExecutions)
+          .where(eq(paymentExecutions.id, executionId))
+          .limit(1);
+
+        if (execRecord && fencingToken !== undefined && execRecord.fencingToken !== fencingToken) {
+          throw AppError.conflict(
+            `ConstrainedSigner: Stale worker fencing token in database (${execRecord.fencingToken} != ${fencingToken}). Lease superseded.`,
+            'STALE_WORKER_FENCING_TOKEN'
+          );
+        }
+      }
+    }
 
     // 1. Independent Owner & Intent Binding Verification
     if (!intent || !snapshot) {
@@ -135,11 +227,14 @@ export class ConstrainedSimulationSigner {
     const issuedAt = now.toISOString();
 
     // 6. Compute Server-Side Integrity Hash
-    // Binds authorizationId, executionId, snapshotId, exactAmount, recipient, network, expiresAt
+    // Binds authorizationId, executionId, snapshotId, exactAmount, recipient, network, expiresAt, and permitId if present
     const canonicalPayloadString = [
       authorizationId,
       executionId,
       snapshot.id,
+      permit?.permitId || 'no_permit',
+      permit?.reservationId || 'no_reservation',
+      fencingToken !== undefined ? fencingToken.toString() : '1',
       snapshot.exactAmount,
       snapshot.trustedRecipientAddress.toLowerCase(),
       snapshot.networkIdentifier.toLowerCase(),
@@ -168,6 +263,9 @@ export class ConstrainedSimulationSigner {
         simulated: true,
         extra: {
           executionId,
+          permitId: permit?.permitId || null,
+          reservationId: permit?.reservationId || null,
+          fencingToken: fencingToken ?? null,
           resourceId: resourceId || null,
           integrityHash,
         },

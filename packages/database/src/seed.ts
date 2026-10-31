@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from './client.js';
-import { merchants, products, productPaymentOptions, mockMerchantResources } from './schema/index.js';
+import { merchants, products, productPaymentOptions, mockMerchantResources, guardianPolicies } from './schema/index.js';
 import { eq } from 'drizzle-orm';
 
 export interface SeedResult {
@@ -384,6 +384,25 @@ export async function runSeed(connectionString?: string): Promise<SeedResult> {
       if (existing.length === 0) {
         await db.insert(mockMerchantResources).values(res);
       }
+    }
+
+    // Seed default Phase 4 Blue Team Guardian Spending Policy for Base Sepolia USDC
+    const defaultPolicy = {
+      id: '00000000-0000-0000-0000-000000000010',
+      userId: null,
+      policyVersion: 1,
+      assetIdentifier: 'USDC',
+      networkIdentifier: 'eip155:84532',
+      maxAmountPerPayment: '100000000', // 100 USDC in base units (6 decimals)
+      maxAmountPerTask: '200000000', // 200 USDC in base units
+      maxAmountPerDailyWindow: '500000000', // 500 USDC in base units (per 24h rolling window)
+      dailyWindowSeconds: 86400,
+      isActive: true,
+    };
+
+    const existingPolicy = await db.select().from(guardianPolicies).where(eq(guardianPolicies.id, defaultPolicy.id));
+    if (existingPolicy.length === 0) {
+      await db.insert(guardianPolicies).values(defaultPolicy);
     }
 
     const seededMerchants = await db.select().from(merchants);
