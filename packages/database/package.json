@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@x402/shared": "workspace:*",
-    "drizzle-orm": "^0.39.3",
+    "drizzle-orm": "0.45.2",
     "postgres": "^3.4.5"
   },
   "devDependencies": {

@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS simulation_controls (
+  id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+  active BOOLEAN NOT NULL DEFAULT FALSE,
+  reason TEXT NOT NULL DEFAULT '',
+  activated_at TIMESTAMPTZ
+);
+INSERT INTO simulation_controls (id) VALUES (TRUE) ON CONFLICT DO NOTHING;
+REVOKE ALL ON simulation_controls FROM PUBLIC;

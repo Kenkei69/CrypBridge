@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
@@ -34,12 +35,25 @@ export async function runMigrations(connectionString?: string): Promise<void> {
 
     console.log(`[migrate] Found ${files.length} migration file(s) in ${migrationDir}: ${files.join(', ')}`);
 
-    for (const file of files) {
-      const fullPath = path.join(migrationDir, file);
-      console.log(`[migrate] Executing migration: ${file}`);
-      const sqlContent = fs.readFileSync(fullPath, 'utf-8');
-      await sql.unsafe(sqlContent);
-      console.log(`[migrate] Migration ${file} applied successfully.`);
+    await sql`SELECT pg_advisory_lock(4026001)`;
+    try {
+      await sql`CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
+      for (const file of files) {
+        const content = fs.readFileSync(path.join(migrationDir, file), 'utf-8');
+        const checksum = createHash('sha256').update(content).digest('hex');
+        const [existing] = await sql`SELECT checksum FROM app_migrations WHERE name = ${file}`;
+        if (existing) {
+          if (existing.checksum !== checksum) throw new Error(`Applied migration changed: ${file}`);
+          continue;
+        }
+        await sql.begin(async tx => {
+          await tx.unsafe(content);
+          await tx`INSERT INTO app_migrations (name, checksum) VALUES (${file}, ${checksum})`;
+        });
+        console.log(`[migrate] Applied ${file}`);
+      }
+    } finally {
+      await sql`SELECT pg_advisory_unlock(4026001)`;
     }
 
     console.log('[migrate] All migrations applied successfully.');

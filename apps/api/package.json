@@ -11,7 +11,7 @@
     "lint": "echo \"API package linting passed\"",
     "dev": "node --watch ./dist/server.js",
     "start": "node ./dist/server.js",
-    "test": "NODE_ENV=test node --test --test-timeout=30000 ./dist/**/*.test.js"
+    "test": "NODE_ENV=test node --test --test-concurrency=1 --test-timeout=30000 ./dist/**/*.test.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
@@ -19,13 +19,13 @@
     "@x402/database": "workspace:*",
     "@x402/shared": "workspace:*",
     "dotenv": "^16.4.7",
-    "drizzle-orm": "^0.39.3",
+    "drizzle-orm": "0.45.2",
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.0.1",
     "jose": "^6.0.8",
     "pino": "^9.6.0",
     "postgres": "^3.4.5",
-    "zod": "^3.24.2"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

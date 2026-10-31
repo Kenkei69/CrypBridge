@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
 import type { ExecutionPermit } from '@x402/shared';
 
-const GUARDIAN_PERMIT_SECRET =
-  process.env.GUARDIAN_SIGNER_PERMIT_SECRET ||
-  process.env.SIMULATION_SIGNER_SECRET ||
-  'x402_guardian_internal_permit_signer_secret_s77';
+function signingSecret(): string {
+  const value = process.env.GUARDIAN_SIGNER_PERMIT_SECRET;
+  if (process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production') {
+    if (!value || value.length < 32) throw new Error('GUARDIAN_SIGNER_PERMIT_SECRET must contain at least 32 characters');
+  }
+  return value || 'x402_guardian_internal_permit_signer_secret_s77';
+}
 
 export interface GeneratePermitParams {
   executionId: string;
@@ -81,7 +84,7 @@ export function generateExecutionPermit(params: GeneratePermitParams): Execution
 
   const canonicalString = computePermitCanonicalString(unsignedPermit);
   const hmacSignature = crypto
-    .createHmac('sha256', GUARDIAN_PERMIT_SECRET)
+    .createHmac('sha256', signingSecret())
     .update(canonicalString)
     .digest('hex');
 
@@ -110,7 +113,7 @@ export function verifyExecutionPermit(
   // 2. Cryptographic HMAC-SHA256 signature verification
   const canonicalString = computePermitCanonicalString(permit);
   const expectedSignature = crypto
-    .createHmac('sha256', GUARDIAN_PERMIT_SECRET)
+    .createHmac('sha256', signingSecret())
     .update(canonicalString)
     .digest('hex');
 

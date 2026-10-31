@@ -54,7 +54,7 @@ export async function buildApp(customConfig?: Partial<EnvConfig>): Promise<Fasti
         if (allowed.startsWith('https://*.') || allowed.startsWith('http://*.')) {
           const suffix = allowed.replace(/^https?:\/\/\*\./, '');
           const originHost = new URL(origin).host;
-          return originHost.endsWith(suffix);
+          return originHost.endsWith('.' + suffix);
         }
         return false;
       });

@@ -1,3 +1,5 @@
+import { assertPersistentKillSwitch } from './killSwitch.js';
+import { simulationAllowed } from '../../config/simulation.js';
 import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
@@ -14,7 +16,13 @@ import { verifyExecutionPermit } from '../guardian/authorizationService.js';
 import { spendingReservations, paymentExecutions, approvalSnapshots } from '@x402/database/schema';
 
 // Server-side secret for simulated HMAC integrity token (never exposed to client)
-const SIMULATION_SIGNER_SECRET = process.env.SIMULATION_SIGNER_SECRET || 'x402_guardian_internal_sim_signer_secret_k92';
+function signingSecret(): string {
+  const value = process.env.SIMULATION_SIGNER_SECRET;
+  if (process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production') {
+    if (!value || value.length < 32) throw new Error('SIMULATION_SIGNER_SECRET must contain at least 32 characters');
+  }
+  return value || 'x402_guardian_internal_sim_signer_secret_k92';
+}
 
 export interface ConstrainedSigningRequest {
   executionId: string;
@@ -49,7 +57,7 @@ export class ConstrainedSimulationSigner {
 
   constructor(appEnv = 'development') {
     this.appEnv = appEnv;
-    if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+    if (!simulationAllowed(appEnv)) {
       throw AppError.simulationForbidden('ConstrainedSimulationSigner is strictly prohibited in production');
     }
   }
@@ -58,10 +66,12 @@ export class ConstrainedSimulationSigner {
    * Independently validates terms and signs an opaque simulation payment authorization.
    */
   async signSimulationAuthorization(request: ConstrainedSigningRequest): Promise<ConstrainedSigningResult> {
-    if (this.appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+    if (!simulationAllowed(this.appEnv)) {
       throw AppError.simulationForbidden('Cannot sign simulation authorization in production environment');
     }
 
+    if (process.env.APP_ENV === 'production' && !request.db) throw AppError.forbidden('Database control check required');
+    await assertPersistentKillSwitch(request.db);
     if (isKillSwitchActive()) {
       const ks = getKillSwitchStatus();
       throw AppError.forbidden(`ConstrainedSigner: Emergency payment kill switch is active (${ks.reason})`);
@@ -283,7 +293,7 @@ export class ConstrainedSimulationSigner {
     ].join('|');
 
     const integrityHash = crypto
-      .createHmac('sha256', SIMULATION_SIGNER_SECRET)
+      .createHmac('sha256', signingSecret())
       .update(canonicalPayloadString)
       .digest('hex');
 

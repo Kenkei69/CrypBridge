@@ -10,6 +10,10 @@ async function main() {
 
   const app = await buildApp(config);
 
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => { void app.close().then(() => process.exit(0)); });
+  }
+
   try {
     await app.listen({ port: config.PORT, host: config.HOST });
     console.log(`[SERVER] API listening on http://${config.HOST}:${config.PORT}`);

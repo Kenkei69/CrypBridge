@@ -8,7 +8,7 @@ export const BaseUnitAmountSchema = z
   .max(78, 'Amount exceeds maximum supported base-unit length')
   .regex(BaseUnitAmountRegex, 'Amount must be an integer string of base units with no decimals or leading zeros');
 
-export const UuidSchema = z.string().uuid('Invalid UUID format');
+export const UuidSchema = z.guid('Invalid UUID format');
 
 export const CreateConversationSchema = z.object({
   title: z.string().trim().min(1, 'Title cannot be empty').max(120, 'Title cannot exceed 120 characters'),
@@ -17,7 +17,7 @@ export const CreateConversationSchema = z.object({
 export const CreateMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']).default('user'),
   content: z.string().trim().min(1, 'Content cannot be empty').max(8000, 'Message content cannot exceed 8000 characters'),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const CreateDraftPurchaseIntentSchema = z.object({
@@ -105,7 +105,7 @@ export const X402V2RequirementItemSchema = z.object({
   asset: z.string().min(1).max(100),
   payTo: z.string().min(1).max(120),
   maxTimeoutSeconds: z.number().int().positive().max(3600).optional(),
-  extra: z.record(z.unknown()).optional(),
+  extra: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const X402V2PaymentRequiredSchema = z.object({
@@ -117,7 +117,7 @@ export const X402V2PaymentRequiredSchema = z.object({
     mimeType: z.string().max(100).optional(),
   }),
   accepts: z.array(X402V2RequirementItemSchema).min(1),
-  extensions: z.record(z.unknown()).optional(),
+  extensions: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const X402V2PaymentPayloadSchema = z.object({
@@ -131,12 +131,12 @@ export const X402V2PaymentPayloadSchema = z.object({
     approvalSnapshotId: UuidSchema,
     approvalVersion: z.number().int().positive(),
     simulated: z.literal(true),
-    extra: z.record(z.unknown()).optional(),
+    extra: z.record(z.string(), z.unknown()).optional(),
   }),
   resource: z.object({
     url: z.string(),
   }).optional(),
-  extensions: z.record(z.unknown()).optional(),
+  extensions: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const SpendingPolicyUpdateSchema = z.object({

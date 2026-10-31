@@ -2,9 +2,9 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.2-black.svg)](https://fastify.dev/)
-[![Next.js](https://img.shields.io/badge/Next.js-14.2-black.svg)](https://nextjs.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-15.5-black.svg)](https://nextjs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16.10-336791.svg)](https://www.postgresql.org/)
-[![Tests](https://img.shields.io/badge/Tests-102%20Passing-emerald.svg)](./apps/api/src/tests)
+[Deployment guide](./docs/DEPLOYMENT.md) · Simulation only
 
 x402 Guardian protects AI-assisted purchases by checking proposed payments against trusted user authorization before signing or onchain settlement.
 
@@ -17,17 +17,17 @@ x402 Guardian is architected as a modular monorepo:
 - **`packages/shared`**: Shared contracts, domain types, Zod schemas, stable error codes, x402 V2 wire contracts, Guardian policy types, Execution Permits, and Base64 transport utilities.
 - **`packages/database`**: Drizzle schema, SQL migrations, seed scripts, connection pool, spending reservation records, Guardian decision logs, and Row-Level Security (RLS) policies.
 - **`apps/api`**: Fastify backend API with AI assistant service (`DeterministicDemoAdapter`), catalog search, payment option switching, simulated x402 payment engine, Blue Team Guardian security engine, atomic spending reservations, HMAC-based cryptographic execution permits, pre-signing Authorization Gate, constrained simulation signer, simulation settlement adapter, mock merchant service, and emergency kill switch.
-- **`apps/web`**: Next.js 14 & Tailwind CSS dashboard featuring conversational purchasing chat, inline product recommendations, compact authoritative approval cards with Guardian verification badges and accordion checks, budget allowance meter, option switching, in-flight processing animation, simulated settled cards, reconciliation recovery, paywalled demonstration resource modal inspector, security history panel with Guardian decision explorer, and state rehydration.
+- **`apps/web`**: Next.js 15 & Tailwind CSS dashboard featuring conversational purchasing chat, inline product recommendations, compact authoritative approval cards with Guardian verification badges and accordion checks, budget allowance meter, option switching, in-flight processing animation, simulated settled cards, reconciliation recovery, paywalled demonstration resource modal inspector, security history panel with Guardian decision explorer, and state rehydration.
 
-For complete architectural details, see [docs/ARCHITECTURE.md](file:///home/runner/workspace/docs/ARCHITECTURE.md), [docs/THREAT_MODEL.md](file:///home/runner/workspace/docs/THREAT_MODEL.md), [docs/GUARDIAN_POLICY.md](file:///home/runner/workspace/docs/GUARDIAN_POLICY.md), [docs/GUARDIAN_TEST_MATRIX.md](file:///home/runner/workspace/docs/GUARDIAN_TEST_MATRIX.md), and [docs/X402_COMPATIBILITY.md](file:///home/runner/workspace/docs/X402_COMPATIBILITY.md).
+For complete architectural details, see [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/THREAT_MODEL.md](./docs/THREAT_MODEL.md), [docs/GUARDIAN_POLICY.md](./docs/GUARDIAN_POLICY.md), [docs/GUARDIAN_TEST_MATRIX.md](./docs/GUARDIAN_TEST_MATRIX.md), and [docs/X402_COMPATIBILITY.md](./docs/X402_COMPATIBILITY.md).
 
 ---
 
 ## Quickstart & Local Setup
 
 ### Prerequisites
-- Node.js 20+
-- pnpm 9+
+- Node.js 24+
+- pnpm 11.25+
 - PostgreSQL 15+
 
 ### 1. Configure Environment Variables
@@ -48,8 +48,12 @@ Key variables:
 pnpm install
 ```
 
-### 3. Run Database Migrations & Seed
+### 3. Build, then Run Database Migrations & Seed
 ```bash
+# Build the shared packages, database utilities and API first
+pnpm build:api
+
+# Export DATABASE_URL before invoking migration/seed commands
 # Run schema migrations and Row-Level Security policies
 pnpm db:migrate
 
@@ -58,7 +62,7 @@ pnpm db:seed
 ```
 
 ### 4. Run Test Suite
-Runs the 102 automated tests against the real PostgreSQL database:
+Runs the automated tests against a dedicated PostgreSQL test database:
 ```bash
 pnpm test
 ```
@@ -68,6 +72,8 @@ pnpm test
 pnpm typecheck
 pnpm build
 ```
+
+For browser sign-in, configure the Supabase project and public frontend variables in [the deployment guide](./docs/DEPLOYMENT.md). Demo identity switching has been removed.
 
 ### 6. Start Development Servers
 In two separate terminals:
@@ -134,16 +140,16 @@ pnpm dev:web
 
 ## Documentation Index
 
-- [Architecture Specification](file:///home/runner/workspace/docs/ARCHITECTURE.md)
-- [Threat Model & Security Boundaries](file:///home/runner/workspace/docs/THREAT_MODEL.md)
-- [Guardian Policy Specification](file:///home/runner/workspace/docs/GUARDIAN_POLICY.md)
-- [Guardian Adversarial Test Matrix](file:///home/runner/workspace/docs/GUARDIAN_TEST_MATRIX.md)
-- [x402 V2 Protocol Compatibility](file:///home/runner/workspace/docs/X402_COMPATIBILITY.md)
-- [Phase 1 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_1_ACCEPTANCE.md)
-- [Phase 1 Completion Report](file:///home/runner/workspace/COMPLETION_REPORT.md)
-- [Phase 2 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_2_ACCEPTANCE.md)
-- [Phase 2 Completion Report](file:///home/runner/workspace/docs/PHASE_2_COMPLETION_REPORT.md)
-- [Phase 3 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_3_ACCEPTANCE.md)
-- [Phase 3 Completion Report](file:///home/runner/workspace/docs/PHASE_3_COMPLETION_REPORT.md)
-- [Phase 4 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_4_ACCEPTANCE.md)
-- [Phase 4 Completion Report](file:///home/runner/workspace/docs/PHASE_4_COMPLETION_REPORT.md)
+- [Architecture Specification](./docs/ARCHITECTURE.md)
+- [Threat Model & Security Boundaries](./docs/THREAT_MODEL.md)
+- [Guardian Policy Specification](./docs/GUARDIAN_POLICY.md)
+- [Guardian Adversarial Test Matrix](./docs/GUARDIAN_TEST_MATRIX.md)
+- [x402 V2 Protocol Compatibility](./docs/X402_COMPATIBILITY.md)
+- [Phase 1 Acceptance Criteria & Evidence](./docs/PHASE_1_ACCEPTANCE.md)
+- [Phase 1 Completion Report](./COMPLETION_REPORT.md)
+- [Phase 2 Acceptance Criteria & Evidence](./docs/PHASE_2_ACCEPTANCE.md)
+- [Phase 2 Completion Report](./docs/PHASE_2_COMPLETION_REPORT.md)
+- [Phase 3 Acceptance Criteria & Evidence](./docs/PHASE_3_ACCEPTANCE.md)
+- [Phase 3 Completion Report](./docs/PHASE_3_COMPLETION_REPORT.md)
+- [Phase 4 Acceptance Criteria & Evidence](./docs/PHASE_4_ACCEPTANCE.md)
+- [Phase 4 Completion Report](./docs/PHASE_4_COMPLETION_REPORT.md)

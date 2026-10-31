@@ -1,3 +1,4 @@
+import { simulationAllowed } from '../../config/simulation.js';
 import { eq, and, or } from 'drizzle-orm';
 import {
   AppError,
@@ -46,14 +47,14 @@ export class MockMerchantService {
   constructor(db: any, appEnv = 'development') {
     this.db = db;
     this.appEnv = appEnv;
-    if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+    if (!simulationAllowed(appEnv)) {
       throw AppError.simulationForbidden('MockMerchantService is strictly prohibited in production');
     }
     this.settlementEngine = new SimulationSettlementEngine(db, appEnv);
   }
 
   async handleResourceRequest(req: MockMerchantRequest): Promise<MockMerchantResponse> {
-    if (this.appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
+    if (!simulationAllowed(this.appEnv)) {
       throw AppError.simulationForbidden('Cannot process mock merchant resource in production');
     }
     const { resourceId, paymentSignatureHeader, faultInjection } = req;

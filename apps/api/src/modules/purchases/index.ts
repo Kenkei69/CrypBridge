@@ -23,7 +23,7 @@ import {
 import { getConfig } from '../../config/env.js';
 import { recordAuditEvent } from '../audit/auditService.js';
 import { PaymentExecutionWorker } from '../payment-engine/paymentExecutionWorker.js';
-import { getKillSwitchStatus, setKillSwitch } from '../payment-engine/killSwitch.js';
+import { getKillSwitchStatus, setKillSwitch, readPersistentKillSwitch, persistKillSwitch } from '../payment-engine/killSwitch.js';
 
 export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
   const env = getConfig();
@@ -1123,6 +1123,7 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const { enabled, reason } = parsed.data;
+      await persistKillSwitch(app.db, enabled, reason || 'Administrative emergency halt');
       setKillSwitch(enabled, reason);
 
       await recordAuditEvent(app.db, {
@@ -1139,7 +1140,7 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
 
       return {
         success: true,
-        killSwitch: getKillSwitchStatus(),
+        killSwitch: env.APP_ENV === 'production' ? await readPersistentKillSwitch(app.db) : getKillSwitchStatus(),
       };
     }
   );
@@ -1150,7 +1151,7 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: [app.authenticate] },
     async () => {
       return {
-        killSwitch: getKillSwitchStatus(),
+        killSwitch: env.APP_ENV === 'production' ? await readPersistentKillSwitch(app.db) : getKillSwitchStatus(),
       };
     }
   );

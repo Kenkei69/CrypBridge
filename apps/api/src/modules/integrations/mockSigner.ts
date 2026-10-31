@@ -1,3 +1,4 @@
+import { simulationAllowed } from '../../config/simulation.js';
 import {
   AppError,
   type IPaymentSigner,
@@ -12,7 +13,7 @@ export class SimulationPaymentSigner implements IPaymentSigner {
   public readonly isSimulation = true;
 
   constructor(appEnv: string) {
-    if (appEnv === 'production') {
+    if (!simulationAllowed(appEnv)) {
       throw AppError.simulationForbidden('SimulationPaymentSigner is strictly prohibited in production');
     }
   }

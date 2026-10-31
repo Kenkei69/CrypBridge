@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fp from 'fastify-plugin';
-import { jwtVerify, SignJWT } from 'jose';
+import { jwtVerify, SignJWT, createRemoteJWKSet } from 'jose';
 import { AppError, type AuthenticatedUser } from '@x402/shared';
 import type { EnvConfig } from '../config/env.js';
 
@@ -17,7 +17,9 @@ declare module 'fastify' {
 
 export const authPlugin = fp(async (app: FastifyInstance, opts: { config: EnvConfig }) => {
   const secretKey = new TextEncoder().encode(opts.config.SUPABASE_JWT_SECRET);
-  const isProduction = opts.config.APP_ENV === 'production';
+  const isProduction = opts.config.APP_ENV === 'production' || opts.config.NODE_ENV === 'production';
+  const issuer = opts.config.SUPABASE_URL?.replace(/\/$/, '') + '/auth/v1';
+  const jwks = (isProduction || opts.config.SUPABASE_URL?.startsWith('https://')) ? createRemoteJWKSet(new URL(issuer + '/.well-known/jwks.json')) : null;
 
   app.decorate('authenticate', async (request: FastifyRequest, _reply: FastifyReply) => {
     const authHeader = request.headers.authorization;
@@ -31,9 +33,9 @@ export const authPlugin = fp(async (app: FastifyInstance, opts: { config: EnvCon
     }
 
     try {
-      const { payload } = await jwtVerify(token, secretKey, {
-        algorithms: ['HS256'],
-      });
+      const { payload } = jwks
+        ? await jwtVerify(token, jwks, { issuer, audience: 'authenticated', algorithms: ['ES256', 'RS256'], requiredClaims: ['sub', 'exp'] })
+        : await jwtVerify(token, secretKey, { algorithms: ['HS256'] });
 
       const sub = payload.sub;
       if (!sub || typeof sub !== 'string') {

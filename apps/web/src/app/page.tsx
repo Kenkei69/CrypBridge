@@ -7,6 +7,7 @@ import { ChatPurchasing } from '../components/ChatPurchasing';
 import { DraftIntentPanel } from '../components/DraftIntentPanel';
 import { SecurityHistoryPanel } from '../components/SecurityHistoryPanel';
 import { apiFetch } from '../lib/api';
+import { verifyCode, refreshSession } from '../lib/auth';
 import type {
   UserProfile,
   Conversation,
@@ -89,14 +90,18 @@ export default function Home() {
 
   // 3. Restore Auth Session
   useEffect(() => {
-    const savedToken = localStorage.getItem('x402_guardian_token');
-    if (savedToken) {
-      setToken(savedToken);
-      fetchUserProfile(savedToken);
-    } else {
-      // Auto-initialize with default demo user Alice for convenience
-      handleLogin('alice@guardian.local', '11111111-1111-1111-1111-111111111111');
-    }
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const restored = await refreshSession();
+        if (!cancelled && restored) { setToken(restored); await fetchUserProfile(restored); }
+      } catch { if (!cancelled) handleLogout(); }
+    };
+    // Legacy development JWTs are intentionally never restored.
+    localStorage.removeItem('x402_guardian_token');
+    void restore();
+    const timer = setInterval(() => { void restore(); }, 10 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
   const fetchUserProfile = async (authToken: string) => {
@@ -113,26 +118,21 @@ export default function Home() {
     }
   };
 
-  const handleLogin = async (email: string, userId?: string) => {
+  const handleLogin = async (email: string, code?: string) => {
+    setAuthLoading(true);
     try {
-      setAuthLoading(true);
-      const res = await apiFetch<{ token: string; user: UserProfile }>('/api/v1/auth/test-token', {
-        method: 'POST',
-        body: JSON.stringify({ email, userId }),
-      });
-      setToken(res.token);
-      localStorage.setItem('x402_guardian_token', res.token);
-      await fetchUserProfile(res.token);
-    } catch (err) {
-      console.error('Authentication error:', err);
-    } finally {
-      setAuthLoading(false);
-    }
+      const authToken = await verifyCode(email, code || '');
+      const res = await apiFetch<{ user: UserProfile }>('/api/v1/auth/me', { token: authToken });
+      setToken(authToken); setUser(res.user);
+    } catch (err) { localStorage.removeItem('x402_refresh_token'); throw err; }
+    finally { setAuthLoading(false); }
   };
 
   const handleLogout = () => {
     localStorage.removeItem('x402_guardian_token');
     localStorage.removeItem('x402_active_conv_id');
+    localStorage.removeItem('x402_refresh_token');
+    setGuardianDecisions([]); setBudgetSummary(null);
     setToken(null);
     setUser(null);
     setConversations([]);

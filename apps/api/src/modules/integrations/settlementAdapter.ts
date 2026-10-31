@@ -1,3 +1,4 @@
+import { simulationAllowed } from '../../config/simulation.js';
 import {
   AppError,
   type ISettlementAdapter,
@@ -9,7 +10,7 @@ export class SimulationSettlementAdapter implements ISettlementAdapter {
   public readonly isSimulation = true;
 
   constructor(appEnv: string) {
-    if (appEnv === 'production') {
+    if (!simulationAllowed(appEnv)) {
       throw AppError.simulationForbidden('SimulationSettlementAdapter is strictly prohibited in production');
     }
   }
