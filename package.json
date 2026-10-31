@@ -1,0 +1,23 @@
+{
+  "name": "x402-guardian",
+  "version": "0.1.0",
+  "private": true,
+  "description": "x402 Guardian: AI-assisted purchasing and payment protection",
+  "scripts": {
+    "build": "pnpm --filter \"@x402/*\" build",
+    "lint": "pnpm --filter \"@x402/*\" lint",
+    "test": "pnpm --filter \"@x402/api\" test",
+    "typecheck": "pnpm --filter \"@x402/*\" typecheck",
+    "db:migrate": "pnpm --filter \"@x402/database\" db:migrate",
+    "db:seed": "pnpm --filter \"@x402/database\" db:seed",
+    "dev:api": "pnpm --filter \"@x402/api\" dev",
+    "dev:web": "pnpm --filter \"@x402/web\" dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

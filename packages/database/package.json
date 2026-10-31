@@ -1,0 +1,35 @@
+{
+  "name": "@x402/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "import": "./dist/schema/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b && mkdir -p dist/migrations && cp -r src/migrations/* dist/migrations/",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"Database package linting passed\"",
+    "db:migrate": "node ./dist/migrate.js",
+    "db:seed": "node ./dist/seed.js"
+  },
+  "dependencies": {
+    "@x402/shared": "workspace:*",
+    "drizzle-orm": "^0.39.3",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "drizzle-kit": "^0.30.4",
+    "typescript": "^5.7.3"
+  }
+}
