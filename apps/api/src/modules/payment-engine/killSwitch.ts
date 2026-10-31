@@ -44,5 +44,5 @@ export async function assertPersistentKillSwitch(db: any): Promise<void> {
   if (state.active) throw AppError.forbidden('Emergency simulation halt: ' + state.reason);
 }
 export async function persistKillSwitch(db: any, active: boolean, reason: string): Promise<void> {
-  await db.execute(sql`UPDATE simulation_controls SET active = ${active}, reason = ${active ? reason : ''}, activated_at = ${active ? new Date() : null} WHERE id = TRUE`);
+  await db.execute(sql`UPDATE simulation_controls SET active = ${active}, reason = ${active ? reason : ''}, activated_at = CASE WHEN ${active} THEN NOW() ELSE NULL END WHERE id = TRUE`);
 }
