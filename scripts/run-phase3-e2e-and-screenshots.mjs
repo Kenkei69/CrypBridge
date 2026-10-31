@@ -29,10 +29,10 @@ async function waitForServer(url, timeoutMs = 30000) {
 async function main() {
   console.log('=== Starting Phase 3 E2E & Screenshot Verification ===');
 
-  // 1. Start API Server
+  // 1. Start API Server in test environment mode so automated test fault injection is permitted
   console.log('[1/5] Starting Fastify API server on port 4000...');
   const apiProcess = spawn('node', ['./apps/api/dist/server.js'], {
-    env: { ...process.env, PORT: '4000', HOST: '127.0.0.1' },
+    env: { ...process.env, NODE_ENV: 'test', PORT: '4000', HOST: '127.0.0.1' },
     stdio: 'inherit',
   });
 

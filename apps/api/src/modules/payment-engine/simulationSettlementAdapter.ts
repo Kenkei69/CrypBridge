@@ -1,6 +1,7 @@
 import { eq, or } from 'drizzle-orm';
 import {
   AppError,
+  PHASE3_PINNED_EXECUTION,
   type X402V2PaymentPayload,
   type X402V2SettlementResponse,
 } from '@x402/shared';
@@ -33,7 +34,7 @@ export class SimulationSettlementEngine {
   constructor(db: any, appEnv = 'development') {
     this.db = db;
     this.appEnv = appEnv;
-    if (appEnv === 'production') {
+    if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
       throw AppError.simulationForbidden('SimulationSettlementEngine is strictly prohibited in production');
     }
   }
@@ -45,7 +46,7 @@ export class SimulationSettlementEngine {
     payload: X402V2PaymentPayload,
     options?: SettlementSubmissionOptions
   ): Promise<X402V2SettlementResponse> {
-    if (this.appEnv === 'production') {
+    if (this.appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
       throw AppError.simulationForbidden('Cannot settle simulation payment in production');
     }
 
@@ -70,6 +71,21 @@ export class SimulationSettlementEngine {
       throw AppError.badRequest('Invalid x402 V2 payment payload or missing simulation flag');
     }
 
+    // Strict positive allowlist: permits exclusively the pinned Base Sepolia USDC exact scheme
+    const isUsdc =
+      payload.accepted.asset.toUpperCase() === 'USDC' ||
+      payload.accepted.asset.toLowerCase() === PHASE3_PINNED_EXECUTION.assetAddress.toLowerCase();
+
+    if (
+      payload.accepted.network !== 'eip155:84532' ||
+      !isUsdc ||
+      payload.accepted.scheme !== 'exact'
+    ) {
+      throw AppError.badRequest(
+        `SimulationSettlementEngine: Unsupported execution combination (${payload.accepted.network} - ${payload.accepted.asset}). Permits strictly Base Sepolia (eip155:84532) USDC exact scheme.`
+      );
+    }
+
     const authId = payload.payload.authorizationId;
     const executionId = (payload.payload.extra?.executionId as string) || null;
     const intentId = payload.payload.intentId;
@@ -79,12 +95,13 @@ export class SimulationSettlementEngine {
       throw AppError.badRequest('Payload missing required authorization or intent identity');
     }
 
-    // 3. Replay Protection: Check if this authorization has already been settled
+    // 3. Replay Protection: Check if this purchase intent or authorization has already been settled
     const existing = await this.db
       .select()
       .from(settlementRecords)
       .where(
         or(
+          eq(settlementRecords.purchaseIntentId, intentId),
           eq(settlementRecords.settlementReference, `sim_settlement_${authId}`),
           executionId ? eq(settlementRecords.paymentExecutionId, executionId) : undefined
         )
@@ -106,21 +123,47 @@ export class SimulationSettlementEngine {
     // 4. Generate Stable Simulated Settlement Identifier
     const settlementReference = `sim_settlement_${authId}`;
 
-    // 5. Persist Settlement Record
-    const [record] = await this.db
-      .insert(settlementRecords)
-      .values({
-        purchaseIntentId: intentId,
-        paymentExecutionId: executionId,
-        assetIdentifier: accepted.asset,
-        networkIdentifier: accepted.network,
-        amount: accepted.amount,
-        recipientAddress: accepted.payTo,
-        settlementType: 'simulated',
-        settlementReference,
-        settledAt: new Date(),
-      })
-      .returning();
+    // 5. Persist Settlement Record with purchase-level uniqueness protection
+    let record: any;
+    try {
+      const [insertedRecord] = await this.db
+        .insert(settlementRecords)
+        .values({
+          purchaseIntentId: intentId,
+          paymentExecutionId: executionId,
+          assetIdentifier: accepted.asset,
+          networkIdentifier: accepted.network,
+          amount: accepted.amount,
+          recipientAddress: accepted.payTo,
+          settlementType: 'simulated',
+          settlementReference,
+          settledAt: new Date(),
+        })
+        .returning();
+      record = insertedRecord;
+    } catch (insertErr: any) {
+      // If purchase-level unique constraint catches a duplicate attempt, retrieve existing record
+      const [existingRec] = await this.db
+        .select()
+        .from(settlementRecords)
+        .where(
+          or(
+            eq(settlementRecords.purchaseIntentId, intentId),
+            eq(settlementRecords.settlementReference, settlementReference)
+          )
+        )
+        .limit(1);
+      if (existingRec) {
+        return {
+          success: true,
+          network: existingRec.networkIdentifier,
+          transactionHash: existingRec.settlementReference || `sim_settle_${existingRec.id}`,
+          simulated: true,
+          settledAt: existingRec.settledAt ? existingRec.settledAt.toISOString() : new Date().toISOString(),
+        };
+      }
+      throw insertErr;
+    }
 
     // 6. Handle lost response fault injection (settled in DB, but throws before returning response)
     if (faultInjection === 'lost_response') {

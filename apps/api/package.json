@@ -11,7 +11,7 @@
     "lint": "echo \"API package linting passed\"",
     "dev": "node --watch ./dist/server.js",
     "start": "node ./dist/server.js",
-    "test": "node --test --test-timeout=30000 ./dist/**/*.test.js"
+    "test": "NODE_ENV=test node --test --test-timeout=30000 ./dist/**/*.test.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

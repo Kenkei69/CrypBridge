@@ -10,6 +10,7 @@ declare module 'fastify' {
   }
   interface FastifyInstance {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    requireAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     generateTestToken: (user: Partial<AuthenticatedUser> & { email: string; id?: string }, expiresInSeconds?: number) => Promise<string>;
   }
 }
@@ -63,6 +64,13 @@ export const authPlugin = fp(async (app: FastifyInstance, opts: { config: EnvCon
         throw AppError.unauthorized('Token has expired');
       }
       throw AppError.unauthorized(`Token verification failed: ${message}`);
+    }
+  });
+
+  app.decorate('requireAdmin', async (request: FastifyRequest, reply: FastifyReply) => {
+    await app.authenticate(request, reply);
+    if (request.user.role !== 'admin') {
+      throw AppError.forbidden('Administrator privileges required to execute this operation', 'ADMIN_REQUIRED');
     }
   });
 

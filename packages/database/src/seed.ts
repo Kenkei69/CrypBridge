@@ -326,7 +326,7 @@ export async function runSeed(connectionString?: string): Promise<SeedResult> {
         name: 'Model Host Labs API Key',
         description: 'Prepaid 1,000,000 token API credential for high-throughput inference',
         content: JSON.stringify({
-          apiKey: 'mhl_sim_live_key_990142_tier1_demo',
+          apiKey: 'mhl_sim_mock_demo_key_990142_invalid',
           baseUrl: 'https://api.modelhostlabs.demo.internal/v1',
           tokenQuota: 1000000,
           models: ['llama-3.3-70b-instruct', 'deepseek-r1-distill'],
@@ -357,7 +357,7 @@ export async function runSeed(connectionString?: string): Promise<SeedResult> {
         description: 'Streaming websocket endpoint and HMAC webhook secret',
         content: JSON.stringify({
           wsEndpoint: 'wss://stream.threatfeed.demo.internal/v1/security-events',
-          webhookSecret: 'sec_wh_sim_9182371928_secret',
+          webhookSecret: 'sec_wh_sim_mock_9182371928_invalid_secret',
           feedCategories: ['drainer_addresses', 'phishing_domains', 'prompt_injection_signatures'],
           notice: 'Demonstration Threat Feed — Simulation stream credential.',
         }),

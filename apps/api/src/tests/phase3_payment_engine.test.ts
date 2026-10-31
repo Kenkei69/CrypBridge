@@ -10,7 +10,11 @@ import {
 } from '@x402/shared';
 import { parseAndValidatePaymentRequirements } from '../modules/payment-engine/requirementsParser.js';
 import { ConstrainedSimulationSigner } from '../modules/payment-engine/constrainedSigner.js';
+import { SimulationSettlementEngine } from '../modules/payment-engine/simulationSettlementAdapter.js';
+import { PaymentExecutionWorker } from '../modules/payment-engine/paymentExecutionWorker.js';
 import { setKillSwitch } from '../modules/payment-engine/killSwitch.js';
+import { paymentExecutions, settlementRecords, approvalSnapshots } from '@x402/database/schema';
+import { eq } from 'drizzle-orm';
 
 describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycle', () => {
   let app: FastifyInstance;
@@ -23,11 +27,18 @@ describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycl
     userId: '22222222-2222-2222-2222-222222222222',
     email: 'bob@guardian.local',
   };
+  const userAdmin = {
+    userId: '00000000-0000-0000-0000-000000000000',
+    email: 'admin@guardian.local',
+    role: 'admin' as const,
+  };
 
   let aliceToken: string;
   let bobToken: string;
+  let adminToken: string;
 
   before(async () => {
+    process.env.NODE_ENV = 'test';
     app = await buildApp({ LOG_LEVEL: 'fatal' });
     await app.ready();
 
@@ -39,6 +50,16 @@ describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycl
       id: userBob.userId,
       email: userBob.email,
     });
+    adminToken = await app.generateTestToken({
+      id: userAdmin.userId,
+      email: userAdmin.email,
+      role: 'admin',
+    });
+
+    // Ensure profiles exist in DB for test users
+    await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { authorization: `Bearer ${aliceToken}` } });
+    await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { authorization: `Bearer ${bobToken}` } });
+    await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { authorization: `Bearer ${adminToken}` } });
 
     // Ensure kill switch is deactivated for test start
     setKillSwitch(false);
@@ -700,20 +721,50 @@ describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycl
   // 6. Emergency Kill Switch Controls
   // ==========================================
   describe('Emergency Kill Switch Controls', () => {
-    it('allows inspecting and activating global kill switch', async () => {
-      // Check initial state
+    it('enforces authentication and administrator authorization for kill switch mutation', async () => {
+      // 1. Unauthenticated inspection is rejected
+      const unauthGetRes = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/kill-switch',
+      });
+      assert.equal(unauthGetRes.statusCode, 401);
+
+      // 2. Authenticated user can inspect kill switch state
       const initialRes = await app.inject({
         method: 'GET',
         url: '/api/v1/admin/kill-switch',
+        headers: { authorization: `Bearer ${aliceToken}` },
       });
       assert.equal(initialRes.statusCode, 200);
       assert.equal(initialRes.json().killSwitch.active, false);
 
-      // Activate kill switch
-      const activateRes = await app.inject({
+      // 3. Unauthenticated mutation is rejected with 401
+      const unauthMutateRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/kill-switch',
+        payload: { enabled: true },
+      });
+      assert.equal(unauthMutateRes.statusCode, 401);
+
+      // 4. Non-admin user mutation is rejected with 403 ADMIN_REQUIRED
+      const nonAdminRes = await app.inject({
         method: 'POST',
         url: '/api/v1/admin/kill-switch',
         headers: { authorization: `Bearer ${aliceToken}` },
+        payload: {
+          enabled: true,
+          reason: 'Unauthorized attempt',
+        },
+      });
+      assert.equal(nonAdminRes.statusCode, 403);
+      assert.equal(nonAdminRes.json().error.code, 'FORBIDDEN');
+      assert.ok(nonAdminRes.json().error.message.includes('Administrator privileges required'));
+
+      // 5. Admin user mutation succeeds
+      const activateRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/admin/kill-switch',
+        headers: { authorization: `Bearer ${adminToken}` },
         payload: {
           enabled: true,
           reason: 'Emergency maintenance drill',
@@ -724,7 +775,7 @@ describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycl
       assert.equal(activateRes.json().killSwitch.active, true);
       assert.equal(activateRes.json().killSwitch.reason, 'Emergency maintenance drill');
 
-      // Attempting to approve an intent while kill switch is active blocks execution
+      // 6. Attempting to approve an intent while kill switch is active blocks execution
       const catRes = await app.inject({ method: 'GET', url: '/api/v1/catalog/products' });
       const gpu = catRes.json().products.find((p: any) => p.name.includes('Cloud GPU'));
       const opt = gpu.paymentOptions.find((o: any) => o.networkIdentifier === PHASE3_PINNED_EXECUTION.network);
@@ -749,15 +800,418 @@ describe('Phase 3: Simulated x402 Payment Engine, Constrained Signer, & Lifecycl
       assert.equal(exec.executionStatus, 'BLOCKED');
       assert.equal(exec.failureCode, 'KILL_SWITCH_ACTIVE');
 
-      // Deactivate kill switch
+      // 7. Deactivate kill switch with admin authorization
       const deactRes = await app.inject({
         method: 'POST',
         url: '/api/v1/admin/kill-switch',
-        headers: { authorization: `Bearer ${aliceToken}` },
+        headers: { authorization: `Bearer ${adminToken}` },
         payload: { enabled: false },
       });
       assert.equal(deactRes.statusCode, 200);
       assert.equal(deactRes.json().killSwitch.active, false);
+    });
+  });
+
+  // ==========================================
+  // 7. Review Invariants & Hardened Safety Controls
+  // ==========================================
+  describe('Review Invariants: Fault Injection, Allowlist Restrictions, Purchase Uniqueness, & Stale Worker Handling', () => {
+    it('blocks fault injection parameters outside of automated test environment', async () => {
+      const originalEnv = process.env.NODE_ENV;
+      try {
+        // Temporarily simulate non-test environment
+        (process.env as any).NODE_ENV = 'development';
+
+        // 1. Mock merchant resource query fault injection blocked
+        const merchantFaultRes = await app.inject({
+          method: 'GET',
+          url: '/api/v1/mock-merchant/resources/res_gpu_h100_compute?fault=timeout',
+        });
+        assert.equal(merchantFaultRes.statusCode, 403);
+        assert.equal(merchantFaultRes.json().error.code, 'FORBIDDEN');
+        assert.ok(merchantFaultRes.json().error.message.includes('Fault injection controls are restricted'));
+
+        // 2. Approve endpoint fault injection blocked
+        const catRes = await app.inject({ method: 'GET', url: '/api/v1/catalog/products' });
+        const gpu = catRes.json().products.find((p: any) => p.name.includes('Cloud GPU'));
+        const opt = gpu.paymentOptions.find((o: any) => o.networkIdentifier === PHASE3_PINNED_EXECUTION.network);
+
+        const createRes = await app.inject({
+          method: 'POST',
+          url: '/api/v1/purchases/intents',
+          headers: { authorization: `Bearer ${aliceToken}` },
+          payload: { productId: gpu.id, paymentOptionId: opt.id },
+        });
+        const intent = createRes.json().intent;
+
+        const approveFaultRes = await app.inject({
+          method: 'POST',
+          url: `/api/v1/purchases/intents/${intent.id}/approve`,
+          headers: { authorization: `Bearer ${aliceToken}` },
+          payload: {
+            expectedVersion: intent.version,
+            mockMerchantFault: 'timeout',
+          },
+        });
+        assert.equal(approveFaultRes.statusCode, 403);
+        assert.equal(approveFaultRes.json().error.code, 'FORBIDDEN');
+        assert.ok(approveFaultRes.json().error.message.includes('Fault injection controls are restricted'));
+      } finally {
+        (process.env as any).NODE_ENV = originalEnv;
+      }
+    });
+
+    it('enforces positive execution allowlist in ConstrainedSimulationSigner and rejects production', async () => {
+      // 1. Instantiating in production throws simulationForbidden
+      assert.throws(
+        () => new ConstrainedSimulationSigner('production'),
+        /ConstrainedSimulationSigner is strictly prohibited in production/
+      );
+
+      const signer = new ConstrainedSimulationSigner('development');
+
+      const mockSnapshot: any = {
+        id: 'snapshot_1',
+        userId: 'user_1',
+        purchaseIntentId: 'intent_1',
+        approvalVersion: 1,
+        status: 'active',
+        expiresAt: new Date(Date.now() + 60000),
+        networkIdentifier: PHASE3_PINNED_EXECUTION.network,
+        assetIdentifier: PHASE3_PINNED_EXECUTION.assetSymbol,
+        exactAmount: '5000000',
+        trustedRecipientAddress: '0x1111111111111111111111111111111111111111',
+      };
+      const mockIntent: any = {
+        id: 'intent_1',
+        userId: 'user_1',
+        version: 1,
+      };
+
+      // 2. Reject unsupported network (e.g. Ethereum mainnet eip155:1)
+      await assert.rejects(
+        signer.signSimulationAuthorization({
+          executionId: 'exec_1',
+          snapshot: { ...mockSnapshot, networkIdentifier: 'eip155:1' },
+          intent: mockIntent,
+          requirementItem: {
+            scheme: 'exact',
+            network: 'eip155:1',
+            asset: 'USDC',
+            amount: '5000000',
+            payTo: '0x1111111111111111111111111111111111111111',
+          },
+          resourceId: 'res_1',
+          resourceUrl: 'https://demo.internal/res',
+        }),
+        /explicitly supported execution combination/
+      );
+
+      // 3. Reject unsupported asset (e.g. USDT)
+      await assert.rejects(
+        signer.signSimulationAuthorization({
+          executionId: 'exec_1',
+          snapshot: { ...mockSnapshot, assetIdentifier: 'USDT' },
+          intent: mockIntent,
+          requirementItem: {
+            scheme: 'exact',
+            network: PHASE3_PINNED_EXECUTION.network,
+            asset: 'USDT',
+            amount: '5000000',
+            payTo: '0x1111111111111111111111111111111111111111',
+          },
+          resourceId: 'res_1',
+          resourceUrl: 'https://demo.internal/res',
+        }),
+        /Permits only USDC for Phase 3 simulated execution/
+      );
+
+      // 4. Reject unsupported scheme
+      await assert.rejects(
+        signer.signSimulationAuthorization({
+          executionId: 'exec_1',
+          snapshot: mockSnapshot,
+          intent: mockIntent,
+          requirementItem: {
+            scheme: 'flexible' as any,
+            network: PHASE3_PINNED_EXECUTION.network,
+            asset: 'USDC',
+            amount: '5000000',
+            payTo: '0x1111111111111111111111111111111111111111',
+          },
+          resourceId: 'res_1',
+          resourceUrl: 'https://demo.internal/res',
+        }),
+        /Permits only exact scheme for Phase 3 simulated execution/
+      );
+    });
+
+    it('enforces positive execution allowlist in SimulationSettlementEngine and rejects production', async () => {
+      // 1. Instantiating in production throws simulationForbidden
+      assert.throws(
+        () => new SimulationSettlementEngine(app.db, 'production'),
+        /SimulationSettlementEngine is strictly prohibited in production/
+      );
+
+      const engine = new SimulationSettlementEngine(app.db, 'development');
+
+      // 2. Reject unsupported network in settlement
+      await assert.rejects(
+        engine.processSettlement({
+          x402Version: 2,
+          accepted: {
+            scheme: 'exact',
+            network: 'eip155:1',
+            asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            amount: '5000000',
+            payTo: '0x1111111111111111111111111111111111111111',
+          },
+          payload: {
+            authorizationId: 'auth_test_1',
+            signature: 'sig_mock',
+            timestamp: new Date().toISOString(),
+            intentId: '00000000-0000-0000-0000-000000000002',
+            approvalSnapshotId: '00000000-0000-0000-0000-000000000003',
+            approvalVersion: 1,
+            simulated: true,
+          },
+        }),
+        /Unsupported execution combination/
+      );
+
+      // 3. Reject unsupported asset in settlement
+      await assert.rejects(
+        engine.processSettlement({
+          x402Version: 2,
+          accepted: {
+            scheme: 'exact',
+            network: PHASE3_PINNED_EXECUTION.network,
+            asset: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+            amount: '5000000',
+            payTo: '0x1111111111111111111111111111111111111111',
+          },
+          payload: {
+            authorizationId: 'auth_test_1',
+            signature: 'sig_mock',
+            timestamp: new Date().toISOString(),
+            intentId: '00000000-0000-0000-0000-000000000002',
+            approvalSnapshotId: '00000000-0000-0000-0000-000000000003',
+            approvalVersion: 1,
+            simulated: true,
+          },
+        }),
+        /Unsupported execution combination/
+      );
+    });
+
+    it('guarantees purchase-level idempotency and uniqueness on settlement records', async () => {
+      const catRes = await app.inject({ method: 'GET', url: '/api/v1/catalog/products' });
+      const gpu = catRes.json().products.find((p: any) => p.name.includes('Cloud GPU'));
+      const opt = gpu.paymentOptions.find((o: any) => o.networkIdentifier === PHASE3_PINNED_EXECUTION.network);
+
+      // 1. Create and approve a purchase intent
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/purchases/intents',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { productId: gpu.id, paymentOptionId: opt.id },
+      });
+      const intent = createRes.json().intent;
+
+      const approveRes = await app.inject({
+        method: 'POST',
+        url: `/api/v1/purchases/intents/${intent.id}/approve`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { expectedVersion: intent.version },
+      });
+      const exec = approveRes.json().execution;
+      assert.equal(exec.executionStatus, 'SIMULATION_COMPLETED');
+
+      // 2. Count settlement records for this intent
+      const records = await app.db
+        .select()
+        .from(settlementRecords)
+        .where(eq(settlementRecords.purchaseIntentId, intent.id));
+
+      assert.equal(records.length, 1, 'Exactly one settlement record must exist for this purchase intent');
+      const firstRecord = records[0];
+      assert.ok(firstRecord);
+
+      // 3. Direct settlement attempt with a DIFFERENT authorization ID on the same purchaseIntentId
+      const engine = new SimulationSettlementEngine(app.db, 'development');
+      const replaySettlement = await engine.processSettlement({
+        x402Version: 2,
+        accepted: {
+          scheme: 'exact',
+          network: intent.networkIdentifier,
+          asset: PHASE3_PINNED_EXECUTION.assetAddress,
+          amount: intent.proposedAmount,
+          payTo: opt.trustedRecipientAddress,
+        },
+        payload: {
+          authorizationId: 'auth_replay_different_token',
+          signature: 'sig_replay',
+          timestamp: new Date().toISOString(),
+          intentId: intent.id,
+          approvalSnapshotId: '00000000-0000-0000-0000-000000000001',
+          approvalVersion: 1,
+          simulated: true,
+        },
+      });
+
+      assert.equal(replaySettlement.success, true);
+      assert.equal(replaySettlement.transactionHash, firstRecord.settlementReference);
+
+      // 4. Confirm no duplicate row was created in database
+      const recordsAfter = await app.db
+        .select()
+        .from(settlementRecords)
+        .where(eq(settlementRecords.purchaseIntentId, intent.id));
+
+      assert.equal(recordsAfter.length, 1, 'Purchase-level uniqueness strictly prevented duplicate settlement row');
+    });
+
+    it('protects against stale workers overwriting newer execution state', async () => {
+      const catRes = await app.inject({ method: 'GET', url: '/api/v1/catalog/products' });
+      const gpu = catRes.json().products.find((p: any) => p.name.includes('Cloud GPU'));
+      const opt = gpu.paymentOptions.find((o: any) => o.networkIdentifier === PHASE3_PINNED_EXECUTION.network);
+
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/purchases/intents',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { productId: gpu.id, paymentOptionId: opt.id },
+      });
+      const intent = createRes.json().intent;
+
+      const [snap] = await app.db
+        .insert(approvalSnapshots)
+        .values({
+          userId: userAlice.userId,
+          purchaseIntentId: intent.id,
+          productId: gpu.id,
+          merchantId: intent.merchantId,
+          paymentOptionId: opt.id,
+          trustedRecipientAddress: opt.trustedRecipientAddress,
+          exactAmount: '5000000',
+          assetIdentifier: PHASE3_PINNED_EXECUTION.assetSymbol,
+          networkIdentifier: PHASE3_PINNED_EXECUTION.network,
+          approvalVersion: 1,
+          schemeParameters: { simulation: true },
+          status: 'active',
+          expiresAt: new Date(Date.now() + 60000),
+          approvedAt: new Date(),
+        })
+        .returning();
+      assert.ok(snap);
+
+      // Create execution directly in QUEUED state
+      const [queuedExec] = await app.db
+        .insert(paymentExecutions)
+        .values({
+          userId: userAlice.userId,
+          purchaseIntentId: intent.id,
+          approvalSnapshotId: snap.id,
+          executionStatus: 'QUEUED',
+          fulfillmentStatus: 'NOT_STARTED',
+          networkIdentifier: PHASE3_PINNED_EXECUTION.network,
+          assetIdentifier: PHASE3_PINNED_EXECUTION.assetSymbol,
+          amount: '5000000',
+          recipientAddress: opt.trustedRecipientAddress,
+          merchantId: intent.merchantId,
+          resourceId: gpu.id,
+        })
+        .returning();
+
+      assert.ok(queuedExec);
+
+      // Worker A claims lease with 0ms expiration (immediately expired)
+      const workerA = new PaymentExecutionWorker(app.db, 'development');
+      await app.db
+        .update(paymentExecutions)
+        .set({
+          workerId: 'worker_alpha',
+          workerLeaseExpiresAt: new Date(Date.now() - 1000), // expired in past
+        })
+        .where(eq(paymentExecutions.id, queuedExec.id));
+
+      // Worker B claims the lease and advances the record
+      await app.db
+        .update(paymentExecutions)
+        .set({
+          workerId: 'worker_beta',
+          workerLeaseExpiresAt: new Date(Date.now() + 30000),
+          executionStatus: 'VALIDATING',
+        })
+        .where(eq(paymentExecutions.id, queuedExec.id));
+
+      // Worker A attempts an update with its stale workerId -> must fail with conflict (WORKER_LEASE_LOST)
+      await assert.rejects(
+        (workerA as any).updateExecutionWithLease(queuedExec.id, 'worker_alpha', {
+          executionStatus: 'SIMULATING_AUTHORIZATION',
+        }),
+        (err: any) => {
+          assert.equal(err.code, 'CONFLICT');
+          assert.ok(err.message.includes('Worker lease lost'));
+          return true;
+        }
+      );
+
+      // Verify the record in DB still belongs to worker_beta
+      const [finalExec] = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(eq(paymentExecutions.id, queuedExec.id));
+
+      assert.ok(finalExec);
+      assert.equal(finalExec.workerId, 'worker_beta');
+      assert.equal(finalExec.executionStatus, 'VALIDATING');
+    });
+
+    it('ensures historical Phase 2 approvals do not execute automatically and require explicit execution', async () => {
+      const catRes = await app.inject({ method: 'GET', url: '/api/v1/catalog/products' });
+      const gpu = catRes.json().products.find((p: any) => p.name.includes('Cloud GPU'));
+      const opt = gpu.paymentOptions.find((o: any) => o.networkIdentifier === PHASE3_PINNED_EXECUTION.network);
+
+      // 1. Create a purchase intent
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/purchases/intents',
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { productId: gpu.id, paymentOptionId: opt.id },
+      });
+      const intent = createRes.json().intent;
+
+      // 2. Approve the intent (first time)
+      const approveRes1 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/purchases/intents/${intent.id}/approve`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { expectedVersion: intent.version },
+      });
+      assert.equal(approveRes1.statusCode, 200);
+      assert.equal(approveRes1.json().idempotent, false);
+
+      // 3. Call approve AGAIN (as would happen with a historical approval)
+      // Must be idempotent and MUST NOT re-trigger execution
+      const approveRes2 = await app.inject({
+        method: 'POST',
+        url: `/api/v1/purchases/intents/${intent.id}/approve`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+        payload: { expectedVersion: intent.version },
+      });
+      assert.equal(approveRes2.statusCode, 200);
+      assert.equal(approveRes2.json().idempotent, true);
+
+      // 4. Explicit user execution request via dedicated execute endpoint
+      const execRes = await app.inject({
+        method: 'POST',
+        url: `/api/v1/purchases/intents/${intent.id}/execute`,
+        headers: { authorization: `Bearer ${aliceToken}` },
+      });
+      assert.equal(execRes.statusCode, 200);
+      assert.ok(execRes.json().execution);
+      assert.equal(execRes.json().execution.purchaseIntentId, intent.id);
     });
   });
 });

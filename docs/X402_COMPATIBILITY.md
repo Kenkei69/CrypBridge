@@ -8,7 +8,11 @@
 
 ## 1. Overview & Architecture
 
-The **x402 V2 Protocol** is an open standard designed to enable trustless, machine-negotiated payments for web-accessible resources and APIs. In x402 V2, an HTTP server protecting a paid resource responds to an unauthenticated or unpaid request with an `HTTP 402 Payment Required` status code and a structured `PAYMENT-REQUIRED` challenge header. An AI purchasing assistant or user-agent inspects these terms, obtains user authorization, and returns an `HTTP GET` (or `POST`) containing a `PAYMENT-SIGNATURE` header. Once the server or facilitator verifies settlement, the server returns `HTTP 200 OK` with a `PAYMENT-RESPONSE` header and the unlocked resource payload.
+The **x402 V2 Protocol** is an open standard designed to enable trustless, machine-negotiated payments for web-accessible resources and APIs (referencing the [x402 Specification draft-v1 / x402 V2 Protocol](https://github.com/coinbase/x402) and IETF HTTP 402 Payment Required standards). In x402 V2, an HTTP server protecting a paid resource responds to an unauthenticated or unpaid request with an `HTTP 402 Payment Required` status code and a structured `PAYMENT-REQUIRED` challenge header. An AI purchasing assistant or user-agent inspects these terms, obtains user authorization, and returns an `HTTP GET` (or `POST`) containing a `PAYMENT-SIGNATURE` header. Once the server or facilitator verifies settlement, the server returns `HTTP 200 OK` with a `PAYMENT-RESPONSE` header and the unlocked resource payload.
+
+> [!IMPORTANT]
+> **Cryptographic Scope Notice**:
+> In Phase 3 simulation, authorizations produced by `ConstrainedSimulationSigner` are **server-side HMAC-SHA256 integrity tokens** bound to internal database approval snapshots. They are **NOT** ECDSA (secp256k1 / EIP-712) or Ed25519 onchain signatures, cannot be broadcast to public blockchains, and do not spend real onchain assets. Full onchain wallet/MPC signing integration is scheduled for later phases.
 
 In **x402 Guardian Phase 3**, this entire protocol lifecycle is implemented with production-grade wire transport contracts and schemas, running against a controlled **simulation settlement engine**.
 
@@ -185,3 +189,20 @@ To guarantee complete transparency and technical integrity, the following matrix
 1. **Zero-Loss Verification**: The client never executes a signature unless the merchant's `PAYMENT-REQUIRED` header terms match the user's `approval_snapshots` terms exactly (recipient address, exact amount, network, asset).
 2. **Crash & Interruption Safety**: The state machine persists all transitions into PostgreSQL. If a network interruption occurs during settlement, the state is held in `RECONCILIATION_REQUIRED` and recovered without duplicate settlement.
 3. **Multi-Tenant Scoping**: All database queries and execution worker commands enforce tenant isolation via `userId` and PostgreSQL Row-Level Security.
+
+---
+
+## 6. Hardened Review Controls & Safety Invariants
+
+1. **Server-Verified Administrator Authorization on Emergency Controls**:
+   The emergency kill-switch mutation endpoint (`POST /api/v1/admin/kill-switch`) strictly enforces `app.requireAdmin`. Unauthenticated callers receive `401 Unauthorized`, and ordinary authenticated users receive `403 Forbidden` (`ADMIN_REQUIRED`).
+2. **Test-Only Restriction for Fault Injection**:
+   Simulated network faults (`fault=timeout`, `corrupt_requirements`, `price_tamper`, `lost_response`, `settlement_rejected`) are restricted strictly to automated tests where `process.env.NODE_ENV === 'test'`. Any request in non-test environments is rejected with `403 Forbidden` (`FAULT_INJECTION_RESTRICTED`).
+3. **Purchase-Level Uniqueness on Settlement Records**:
+   PostgreSQL enforces a unique index on `settlement_records(purchase_intent_id)`. Re-settlement attempts for the same purchase intent—even if re-authorized or with a different idempotency key—safely return the existing settlement record and cannot create duplicate financial ledger entries.
+4. **Atomic Worker Lease Isolation**:
+   Intermediate execution updates check worker lease ownership (`eq(workerId, this.workerId)`). If a worker lease expires and another worker advances the execution, the stale worker is aborted with `409 Conflict` (`WORKER_LEASE_LOST`), preventing duplicate settlement submissions or state overwrites.
+5. **Explicit Execution for Historical Approvals**:
+   Historical Phase 2 approvals (`status: 'approved'`) cannot automatically settle behind the user's back. Re-triggering approval is strictly idempotent. Settle/execution requires a dedicated explicit request to `POST /api/v1/purchases/intents/:id/execute`.
+6. **Sanitized Demonstration Credentials**:
+   All mock merchant API keys and webhook secrets use RFC-reserved demonstration domains (`.invalid`, `.internal`) to prevent any confusion with live commercial credentials.

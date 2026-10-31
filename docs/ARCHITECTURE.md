@@ -235,30 +235,37 @@ stateDiagram-v2
 2. **Constrained Simulation Signer (`constrainedSigner.ts`)**:
    - Generates deterministic simulated authorization IDs (`sim_auth_<uuid>`).
    - Issues server-side HMAC-SHA256 integrity tokens over authorization terms (`${authId}:${network}:${asset}:${amount}:${payTo}`).
-   - Contains a hardcoded safety check (`isProductionTarget`) that throws `SIGNER_REFUSED_PRODUCTION` if pointed at Ethereum Mainnet (`eip155:1`), Base Mainnet (`eip155:8453`), or Solana Mainnet (`solana:mainnet-beta`).
+   - Contains a hardcoded safety check (`isProductionTarget`) that throws `SIGNER_REFUSED_PRODUCTION` if pointed at production or unpinned networks.
+   - Enforces a positive execution allowlist: permits exclusively Base Sepolia (`eip155:84532`) USDC (`0x036CbD53842c5426634e7929541eC2318f3dCF7e` / `USDC`) with `exact` scheme. Rejects production environment (`appEnv === 'production'` or `SIMULATION_MODE === 'false'`).
 
 3. **Controlled Mock Merchant (`mockMerchantService.ts`)**:
    - Implements x402 V2 protocol: returns HTTP 402 with Base64 `PAYMENT-REQUIRED` on unsigned requests, and HTTP 200 with `PAYMENT-RESPONSE` when supplied with a valid `PAYMENT-SIGNATURE`.
-   - Supports configurable test fault injection (`corrupt_requirements`, `lost_response`, `delivery_failure`).
+   - Supports configurable test fault injection (`corrupt_requirements`, `lost_response`, `delivery_failure`), restricted strictly to automated tests (`process.env.NODE_ENV === 'test'`).
 
-4. **Worker Leases & Concurrency Protection**:
+4. **Worker Leases & Stale Worker Concurrency Protection**:
    - Atomic worker lease acquisition via PostgreSQL conditional updates:
      ```sql
      UPDATE payment_executions
-     SET worker_instance_id = :workerId, worker_lease_expires_at = NOW() + INTERVAL '30 seconds'
+     SET worker_id = :workerId, worker_lease_expires_at = NOW() + INTERVAL '30 seconds'
      WHERE id = :id AND (worker_lease_expires_at IS NULL OR worker_lease_expires_at < NOW());
      ```
+   - Guards all intermediate state transitions (`updateExecutionWithLease`) by verifying `worker_id` ownership. If a stale worker awakens after lease expiration, subsequent updates fail with `409 Conflict` (`WORKER_LEASE_LOST`), preventing duplicate settlement submissions or state overwrites.
    - Prevents option switching during in-flight states (`VALIDATING`, `SIMULATING_AUTHORIZATION`, `SETTLING_SIMULATION`).
 
 5. **Settlement Ledger & Ambiguous Outcome Reconciliation**:
-   - Immutable `settlement_records` table linked directly to payment executions.
+   - Immutable `settlement_records` table linked directly to payment executions with a unique index on `purchase_intent_id` (`settlement_records_intent_unique_idx`), guaranteeing 1:1 settlement uniqueness per purchase intent.
    - In ambiguous network conditions (`lost_response`), execution halts in `RECONCILIATION_REQUIRED`.
    - Reconcile endpoint (`POST /api/v1/purchases/executions/:id/retry`) queries the persistent settlement ledger and recovers the completed state without duplicate payment.
 
 6. **Paywalled Demonstration Resource Delivery**:
    - Real paywalled payloads seeded in PostgreSQL (`mock_merchant_resources`).
    - Delivers compute credentials, reasoning API tokens, and threat feed bundles upon verified settlement.
-   - Delivery failures allow safe retry without re-settling.
+   - Delivery failures are distinct from settlement failures; resource delivery retry (`POST /api/v1/purchases/executions/:id/retry`) delivers the resource without re-charging or re-settling.
 
 7. **Administrative Emergency Kill Switch (`killSwitch.ts`)**:
-   - Global toggle (`POST /api/v1/admin/kill-switch`) that halts all execution processing across the system with code `KILL_SWITCH_ACTIVE`.
+   - Server-verified administrator authorization endpoint (`POST /api/v1/admin/kill-switch` via `app.requireAdmin`, requiring role `admin`) that halts all execution processing across the system with code `KILL_SWITCH_ACTIVE`.
+   - Inspection endpoint (`GET /api/v1/admin/kill-switch`) requires authentication.
+
+8. **Historical Approval Execution Boundary**:
+   - Historical Phase 2 approvals do not execute automatically behind the user's back.
+   - Settle/execution requires a dedicated explicit user request via `POST /api/v1/purchases/intents/:id/execute`. Re-approving an already approved intent remains strictly idempotent without triggering payment.

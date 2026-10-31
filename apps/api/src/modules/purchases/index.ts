@@ -536,6 +536,10 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
       }
       const { expectedVersion, idempotencyKey, mockMerchantFault } = parsed.data;
 
+      if (mockMerchantFault && process.env.NODE_ENV !== 'test') {
+        throw AppError.forbidden('Fault injection controls are restricted strictly to automated tests', 'FAULT_INJECTION_RESTRICTED');
+      }
+
       // Execute approval atomically inside a transaction with row lock
       const result = await app.db.transaction(async (tx) => {
         // Fetch purchase intent with FOR UPDATE concurrency lock
@@ -855,6 +859,126 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  // POST /api/v1/purchases/intents/:id/execute - Explicit user execution request for approved intent
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/purchases/intents/:id/execute',
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const intentId = UuidSchema.parse(request.params.id);
+      const userId = request.user.id;
+
+      // 1. Fetch purchase intent
+      const [intent] = await app.db
+        .select()
+        .from(purchaseIntents)
+        .where(and(eq(purchaseIntents.id, intentId), eq(purchaseIntents.userId, userId)))
+        .limit(1);
+
+      if (!intent) {
+        throw AppError.notFound('Purchase Intent');
+      }
+
+      if (intent.status !== 'approved') {
+        throw AppError.badRequest(
+          `Cannot execute purchase intent in status '${intent.status}'. Intent must be approved first.`
+        );
+      }
+
+      // 2. Fetch active approval snapshot
+      const [snapshot] = await app.db
+        .select()
+        .from(approvalSnapshots)
+        .where(
+          and(
+            eq(approvalSnapshots.purchaseIntentId, intentId),
+            eq(approvalSnapshots.status, 'active')
+          )
+        )
+        .orderBy(desc(approvalSnapshots.createdAt))
+        .limit(1);
+
+      if (!snapshot) {
+        throw AppError.badRequest('No active approval snapshot found for this purchase intent.');
+      }
+
+      // Expiration check on approval snapshot
+      if (snapshot.expiresAt && new Date(snapshot.expiresAt) < new Date()) {
+        throw AppError.badRequest('Approval snapshot has expired. Cannot execute historical expired approval.');
+      }
+
+      // 3. Check if an execution already exists
+      let [execution] = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(eq(paymentExecutions.purchaseIntentId, intentId))
+        .limit(1);
+
+      if (!execution) {
+        // Create execution for historical approval that didn't have one
+        const [newExecution] = await app.db
+          .insert(paymentExecutions)
+          .values({
+            userId,
+            purchaseIntentId: intent.id,
+            approvalSnapshotId: snapshot.id,
+            executionStatus: 'QUEUED',
+            fulfillmentStatus: 'NOT_STARTED',
+            networkIdentifier: intent.networkIdentifier,
+            assetIdentifier: intent.assetIdentifier,
+            amount: intent.proposedAmount,
+            recipientAddress: snapshot.trustedRecipientAddress,
+            merchantId: intent.merchantId,
+            resourceId: intent.productId,
+            idempotencyKey: intent.idempotencyKey || null,
+          })
+          .returning();
+
+        if (!newExecution) {
+          throw new AppError('Failed to create payment execution record', 'INTERNAL_ERROR', 500);
+        }
+        execution = newExecution;
+
+        await recordAuditEvent(app.db, {
+          userId,
+          eventType: 'PAYMENT_EXECUTION_QUEUED',
+          actorType: 'user',
+          resourceType: 'payment_execution',
+          resourceId: execution.id,
+          payload: {
+            purchaseIntentId: intent.id,
+            approvalSnapshotId: snapshot.id,
+            explicitUserExecution: true,
+          },
+          ipAddress: request.ip || null,
+          userAgent: (request.headers['user-agent'] as string) || null,
+        });
+      }
+
+      if (!execution) {
+        throw new AppError('Failed to resolve payment execution record', 'INTERNAL_ERROR', 500);
+      }
+
+      // Process if queued
+      if (execution.executionStatus === 'QUEUED') {
+        await worker.processExecution(execution.id);
+        const [refreshed] = await app.db
+          .select()
+          .from(paymentExecutions)
+          .where(eq(paymentExecutions.id, execution.id))
+          .limit(1);
+        if (refreshed) {
+          execution = refreshed;
+        }
+      }
+
+      return {
+        execution,
+        intent,
+        snapshot,
+      };
+    }
+  );
+
   // GET /api/v1/purchases/executions/:id - Get execution details
   app.get<{ Params: { id: string } }>(
     '/api/v1/purchases/executions/:id',
@@ -924,6 +1048,10 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
       const parsed = ProcessPaymentExecutionSchema.safeParse(request.body || {});
       const mockMerchantFault = parsed.success ? parsed.data.mockMerchantFault : undefined;
 
+      if (mockMerchantFault && process.env.NODE_ENV !== 'test') {
+        throw AppError.forbidden('Fault injection controls are restricted strictly to automated tests', 'FAULT_INJECTION_RESTRICTED');
+      }
+
       const [execution] = await app.db
         .select()
         .from(paymentExecutions)
@@ -984,10 +1112,10 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
-  // POST /api/v1/admin/kill-switch - Emergency kill switch toggle
+  // POST /api/v1/admin/kill-switch - Emergency kill switch toggle (Admin only)
   app.post(
     '/api/v1/admin/kill-switch',
-    { preHandler: [app.authenticate] },
+    { preHandler: [app.requireAdmin] },
     async (request) => {
       const parsed = KillSwitchSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -1019,6 +1147,7 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/v1/admin/kill-switch - Get emergency kill switch status
   app.get(
     '/api/v1/admin/kill-switch',
+    { preHandler: [app.authenticate] },
     async () => {
       return {
         killSwitch: getKillSwitchStatus(),

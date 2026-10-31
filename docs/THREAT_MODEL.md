@@ -105,6 +105,11 @@ x402 Guardian sits between autonomous AI purchasing agents, untrusted merchants,
 | **Floating Point Precision Loss** | Medium | Integer base-unit strings and `NUMERIC(78, 0)` database representation | `phase2_approval_and_assistant.test.ts`, `phase3_payment_engine.test.ts` |
 | **Merchant Term Tampering** | Critical | Pre-signing Authorization Gate equality check | `phase3_payment_engine.test.ts` |
 | **Dropped Packet Double Charge** | High | Settlement ledger query & `RECONCILIATION_REQUIRED` recovery | `phase3_payment_engine.test.ts` |
+| **Duplicate Settlement Records** | Critical | Unique database constraint on `settlement_records(purchase_intent_id)` | `phase3_payment_engine.test.ts` |
+| **Stale Worker Race Conditions** | High | Lease verification on every intermediate update (`WORKER_LEASE_LOST`) | `phase3_payment_engine.test.ts` |
+| **Privilege Escalation on Kill Switch** | High | Server-verified administrator authorization (`app.requireAdmin`, role `admin`) | `phase3_payment_engine.test.ts` |
+| **Fault Injection Parameter Abuse** | High | Strict lockout outside automated test environment (`NODE_ENV === 'test'`) | `phase3_payment_engine.test.ts` |
+| **Historical Approval Auto-Execution** | Medium | Approvals do not auto-settle; explicit user request required (`POST /execute`) | `phase3_payment_engine.test.ts` |
 | **Unpinned Network Execution** | Medium | Strict pinned execution boundary (`UNSUPPORTED_EXECUTION_COMBINATION`) | `phase3_payment_engine.test.ts` |
 | **Systemic Runaway Execution** | High | Global administrative emergency kill switch (`KILL_SWITCH_ACTIVE`) | `phase3_payment_engine.test.ts` |
 

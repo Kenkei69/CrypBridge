@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import {
   AppError,
+  PHASE3_PINNED_EXECUTION,
   type ApprovalSnapshot,
   type PurchaseIntent,
   type X402V2PaymentPayload,
@@ -39,7 +40,7 @@ export class ConstrainedSimulationSigner {
 
   constructor(appEnv = 'development') {
     this.appEnv = appEnv;
-    if (appEnv === 'production') {
+    if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
       throw AppError.simulationForbidden('ConstrainedSimulationSigner is strictly prohibited in production');
     }
   }
@@ -48,7 +49,7 @@ export class ConstrainedSimulationSigner {
    * Independently validates terms and signs an opaque simulation payment authorization.
    */
   async signSimulationAuthorization(request: ConstrainedSigningRequest): Promise<ConstrainedSigningResult> {
-    if (this.appEnv === 'production') {
+    if (this.appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
       throw AppError.simulationForbidden('Cannot sign simulation authorization in production environment');
     }
 
@@ -103,8 +104,30 @@ export class ConstrainedSimulationSigner {
       );
     }
 
-    if (snapshot.networkIdentifier !== 'eip155:84532') {
-      throw AppError.badRequest('ConstrainedSigner: Permits only Base Sepolia (eip155:84532) for Phase 3 simulated execution');
+    // Strict positive allowlist: permits exclusively the pinned Base Sepolia USDC exact scheme
+    if (snapshot.networkIdentifier !== 'eip155:84532' || requirementItem.network !== 'eip155:84532') {
+      throw AppError.badRequest(
+        'ConstrainedSigner: Permits only Base Sepolia (eip155:84532) USDC exact scheme as the explicitly supported execution combination'
+      );
+    }
+
+    const isSnapshotUsdc =
+      snapshot.assetIdentifier.toUpperCase() === 'USDC' ||
+      snapshot.assetIdentifier.toLowerCase() === PHASE3_PINNED_EXECUTION.assetAddress.toLowerCase();
+    const isRequirementUsdc =
+      requirementItem.asset.toUpperCase() === 'USDC' ||
+      requirementItem.asset.toLowerCase() === PHASE3_PINNED_EXECUTION.assetAddress.toLowerCase();
+
+    if (!isSnapshotUsdc || !isRequirementUsdc) {
+      throw AppError.badRequest(
+        'ConstrainedSigner: Permits only USDC for Phase 3 simulated execution'
+      );
+    }
+
+    if (requirementItem.scheme !== 'exact') {
+      throw AppError.badRequest(
+        `ConstrainedSigner: Permits only exact scheme for Phase 3 simulated execution, received scheme: ${requirementItem.scheme}`
+      );
     }
 
     // 5. Generate Unique Authorization Identity

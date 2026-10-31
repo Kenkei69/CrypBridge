@@ -59,6 +59,39 @@ export class PaymentExecutionWorker {
   }
 
   /**
+   * Helper to ensure execution updates only succeed if this worker still holds the lease.
+   * If a lease expired and was claimed by another worker, this will safely fail with WORKER_LEASE_LOST
+   * rather than overwriting newer state.
+   */
+  private async updateExecutionWithLease(
+    executionId: string,
+    workerId: string,
+    updateData: Record<string, any>
+  ): Promise<any> {
+    const [updated] = await this.db
+      .update(paymentExecutions)
+      .set({
+        ...updateData,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(paymentExecutions.id, executionId),
+          eq(paymentExecutions.workerId, workerId)
+        )
+      )
+      .returning();
+
+    if (!updated) {
+      throw AppError.conflict(
+        `Worker lease lost or reassigned to another worker for execution ${executionId}. Operation aborted to preserve execution state integrity.`,
+        'WORKER_LEASE_LOST'
+      );
+    }
+    return updated;
+  }
+
+  /**
    * Processes a single payment execution record through the Phase 3 lifecycle.
    */
   async processExecution(
@@ -196,19 +229,14 @@ export class PaymentExecutionWorker {
               }
             : null;
 
-          const [updated] = await this.db
-            .update(paymentExecutions)
-            .set({
-              executionStatus: 'SIMULATION_COMPLETED',
-              fulfillmentStatus: deliveredResource ? 'DELIVERED' : 'DELIVERY_FAILED',
-              settlementReference: reconciliationResult.settlementReference,
-              deliveredResource,
-              lastReconciledAt: new Date(),
-              workerLeaseExpiresAt: null,
-              updatedAt: new Date(),
-            })
-            .where(eq(paymentExecutions.id, execution.id))
-            .returning();
+          const updated = await this.updateExecutionWithLease(execution.id, workerId, {
+            executionStatus: 'SIMULATION_COMPLETED',
+            fulfillmentStatus: deliveredResource ? 'DELIVERED' : 'DELIVERY_FAILED',
+            settlementReference: reconciliationResult.settlementReference,
+            deliveredResource,
+            lastReconciledAt: new Date(),
+            workerLeaseExpiresAt: null,
+          });
 
           await recordAuditEvent(this.db, {
             userId: execution.userId,
@@ -242,10 +270,9 @@ export class PaymentExecutionWorker {
       }
 
       // 4. State: VALIDATING - Run Authorization Gate
-      await this.db
-        .update(paymentExecutions)
-        .set({ executionStatus: 'VALIDATING', updatedAt: new Date() })
-        .where(eq(paymentExecutions.id, execution.id));
+      await this.updateExecutionWithLease(execution.id, workerId, {
+        executionStatus: 'VALIDATING',
+      });
 
       const gateDecision = evaluateAuthorizationGate(
         {
@@ -271,17 +298,12 @@ export class PaymentExecutionWorker {
 
       if (!gateDecision.allowed) {
         // Block execution
-        const [blocked] = await this.db
-          .update(paymentExecutions)
-          .set({
-            executionStatus: 'BLOCKED',
-            failureCode: gateDecision.reasonCode,
-            failureReason: gateDecision.message,
-            workerLeaseExpiresAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(paymentExecutions.id, execution.id))
-          .returning();
+        const blocked = await this.updateExecutionWithLease(execution.id, workerId, {
+          executionStatus: 'BLOCKED',
+          failureCode: gateDecision.reasonCode,
+          failureReason: gateDecision.message,
+          workerLeaseExpiresAt: null,
+        });
 
         await recordAuditEvent(this.db, {
           userId: execution.userId,
@@ -304,10 +326,9 @@ export class PaymentExecutionWorker {
       }
 
       // 5. State: SIMULATING_AUTHORIZATION - Request requirements from Mock Merchant
-      await this.db
-        .update(paymentExecutions)
-        .set({ executionStatus: 'SIMULATING_AUTHORIZATION', updatedAt: new Date() })
-        .where(eq(paymentExecutions.id, execution.id));
+      await this.updateExecutionWithLease(execution.id, workerId, {
+        executionStatus: 'SIMULATING_AUTHORIZATION',
+      });
 
       const initialMerchantResp = await this.mockMerchant.handleResourceRequest({
         resourceId,
@@ -335,17 +356,12 @@ export class PaymentExecutionWorker {
         });
       } catch (parseErr) {
         // Requirements validation failed
-        const [blocked] = await this.db
-          .update(paymentExecutions)
-          .set({
-            executionStatus: 'BLOCKED',
-            failureCode: 'REQUIREMENTS_MISMATCH',
-            failureReason: (parseErr as Error).message,
-            workerLeaseExpiresAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(paymentExecutions.id, execution.id))
-          .returning();
+        const blocked = await this.updateExecutionWithLease(execution.id, workerId, {
+          executionStatus: 'BLOCKED',
+          failureCode: 'REQUIREMENTS_MISMATCH',
+          failureReason: (parseErr as Error).message,
+          workerLeaseExpiresAt: null,
+        });
 
         await recordAuditEvent(this.db, {
           userId: execution.userId,
@@ -392,14 +408,10 @@ export class PaymentExecutionWorker {
       });
 
       // Persist authorizationId
-      await this.db
-        .update(paymentExecutions)
-        .set({
-          authorizationId: signingResult.authorizationId,
-          executionStatus: 'SETTLING_SIMULATION',
-          updatedAt: new Date(),
-        })
-        .where(eq(paymentExecutions.id, execution.id));
+      await this.updateExecutionWithLease(execution.id, workerId, {
+        authorizationId: signingResult.authorizationId,
+        executionStatus: 'SETTLING_SIMULATION',
+      });
 
       await recordAuditEvent(this.db, {
         userId: execution.userId,
@@ -413,6 +425,20 @@ export class PaymentExecutionWorker {
         },
       });
 
+      // Pre-settlement lease verification: confirm worker still holds valid lease before initiating settlement
+      const [preSettlementRecord] = await this.db
+        .select()
+        .from(paymentExecutions)
+        .where(eq(paymentExecutions.id, execution.id))
+        .limit(1);
+
+      if (!preSettlementRecord || preSettlementRecord.workerId !== workerId) {
+        throw AppError.conflict(
+          'Worker lease lost or reassigned prior to settlement submission. Settlement aborted to prevent duplicate settlement.',
+          'WORKER_LEASE_LOST'
+        );
+      }
+
       // 7. State: SETTLING_SIMULATION - Submit PAYMENT-SIGNATURE to Mock Merchant
       const signatureHeader = encodeX402Header(signingResult.payload);
 
@@ -425,18 +451,13 @@ export class PaymentExecutionWorker {
         });
       } catch (networkOrTimeoutErr) {
         // Network timeout or lost response scenario -> Enter RECONCILIATION_REQUIRED
-        const [reconcileReq] = await this.db
-          .update(paymentExecutions)
-          .set({
-            executionStatus: 'RECONCILIATION_REQUIRED',
-            failureReason: (networkOrTimeoutErr as Error).message,
-            lastReconciledAt: new Date(),
-            reconciliationAttempts: execution.reconciliationAttempts + 1,
-            workerLeaseExpiresAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(paymentExecutions.id, execution.id))
-          .returning();
+        const reconcileReq = await this.updateExecutionWithLease(execution.id, workerId, {
+          executionStatus: 'RECONCILIATION_REQUIRED',
+          failureReason: (networkOrTimeoutErr as Error).message,
+          lastReconciledAt: new Date(),
+          reconciliationAttempts: execution.reconciliationAttempts + 1,
+          workerLeaseExpiresAt: null,
+        });
 
         await recordAuditEvent(this.db, {
           userId: execution.userId,
@@ -474,18 +495,13 @@ export class PaymentExecutionWorker {
           }
         }
 
-        const [completed] = await this.db
-          .update(paymentExecutions)
-          .set({
-            executionStatus: 'SIMULATION_COMPLETED',
-            fulfillmentStatus: 'DELIVERED',
-            settlementReference: settlementRef,
-            deliveredResource: merchantSettlementResp.body,
-            workerLeaseExpiresAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(paymentExecutions.id, execution.id))
-          .returning();
+        const completed = await this.updateExecutionWithLease(execution.id, workerId, {
+          executionStatus: 'SIMULATION_COMPLETED',
+          fulfillmentStatus: 'DELIVERED',
+          settlementReference: settlementRef,
+          deliveredResource: merchantSettlementResp.body,
+          workerLeaseExpiresAt: null,
+        });
 
         await recordAuditEvent(this.db, {
           userId: execution.userId,
@@ -523,18 +539,13 @@ export class PaymentExecutionWorker {
       // Check if simulation was settled, but resource delivery failed
       if (merchantSettlementResp.body?.settled) {
         const settlementRef = merchantSettlementResp.body.settlementReference || `sim_settlement_${signingResult.authorizationId}`;
-        const [delivFailed] = await this.db
-          .update(paymentExecutions)
-          .set({
-            executionStatus: 'SIMULATION_COMPLETED',
-            fulfillmentStatus: 'DELIVERY_FAILED',
-            settlementReference: settlementRef,
-            failureReason: merchantSettlementResp.body.error,
-            workerLeaseExpiresAt: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(paymentExecutions.id, execution.id))
-          .returning();
+        const delivFailed = await this.updateExecutionWithLease(execution.id, workerId, {
+          executionStatus: 'SIMULATION_COMPLETED',
+          fulfillmentStatus: 'DELIVERY_FAILED',
+          settlementReference: settlementRef,
+          failureReason: merchantSettlementResp.body.error,
+          workerLeaseExpiresAt: null,
+        });
 
         await recordAuditEvent(this.db, {
           userId: execution.userId,
@@ -558,17 +569,12 @@ export class PaymentExecutionWorker {
 
       // Otherwise: Definitive failure
       const failureMsg = merchantSettlementResp.body?.error || merchantSettlementResp.body?.details || 'Payment settlement rejected';
-      const [failed] = await this.db
-        .update(paymentExecutions)
-        .set({
-          executionStatus: 'FAILED',
-          failureCode: 'SETTLEMENT_REJECTED',
-          failureReason: failureMsg,
-          workerLeaseExpiresAt: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(paymentExecutions.id, execution.id))
-        .returning();
+      const failed = await this.updateExecutionWithLease(execution.id, workerId, {
+        executionStatus: 'FAILED',
+        failureCode: 'SETTLEMENT_REJECTED',
+        failureReason: failureMsg,
+        workerLeaseExpiresAt: null,
+      });
 
       await recordAuditEvent(this.db, {
         userId: execution.userId,
@@ -588,14 +594,19 @@ export class PaymentExecutionWorker {
         failureReason: failed.failureReason,
       };
     } catch (unexpectedErr) {
-      // Clear lease on unhandled exception so another cycle can reconcile/recover
+      // Clear lease on unhandled exception ONLY if this worker still holds the lease
       await this.db
         .update(paymentExecutions)
         .set({
           workerLeaseExpiresAt: null,
           updatedAt: new Date(),
         })
-        .where(eq(paymentExecutions.id, execution.id));
+        .where(
+          and(
+            eq(paymentExecutions.id, execution.id),
+            eq(paymentExecutions.workerId, workerId)
+          )
+        );
 
       throw unexpectedErr;
     }

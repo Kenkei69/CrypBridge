@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { AppError } from '@x402/shared';
 import { getConfig } from '../../config/env.js';
 import { MockMerchantService, type MockMerchantRequest } from './mockMerchantService.js';
 
@@ -16,6 +17,10 @@ export async function mockMerchantRoutes(app: FastifyInstance): Promise<void> {
       const resourceId = request.params.id;
       const signatureHeader = (request.headers['payment-signature'] as string) || null;
       const fault = request.query.fault;
+
+      if (fault && process.env.NODE_ENV !== 'test') {
+        throw AppError.forbidden('Fault injection controls are restricted strictly to automated tests', 'FAULT_INJECTION_RESTRICTED');
+      }
 
       const resp = await merchantService.handleResourceRequest({
         resourceId,

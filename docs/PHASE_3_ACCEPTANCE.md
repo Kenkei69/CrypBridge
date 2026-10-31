@@ -191,3 +191,16 @@ This document evaluates the completed Phase 3 implementation against all 14 mand
     - Blocked notice: *"Zero-Loss Boundary Enforced: No payment authorization was produced and no settlement occurred."*
   - Resource payload banner: *"Demonstration Paywalled Resource — Accessible exclusively via simulated x402 payment flow."*
   - Visual confirmation present across all captured screenshots.
+
+---
+
+### Criterion 15: Hardened Review Controls & Security Boundaries
+* **Objective**: Enforce server-verified administrator authentication on emergency controls, restrict fault injection to automated test environments, guarantee purchase-level settlement uniqueness, protect against stale worker races, and verify fresh database bootstrapping on disposable databases.
+* **Status**: ACCEPTED
+* **Evidence**:
+  - Kill-switch mutation (`POST /api/v1/admin/kill-switch`) protected with `app.requireAdmin` (verifying token `role === 'admin'`). Non-admin callers receive 403 `ADMIN_REQUIRED`, unauthenticated callers receive 401 `UNAUTHORIZED`.
+  - Fault injection controls (`mockMerchantFault`, `query.fault`) restricted strictly to `process.env.NODE_ENV === 'test'`. Non-test requests are rejected with 403 `FAULT_INJECTION_RESTRICTED`.
+  - Migration `0004_settlement_purchase_intent_unique.sql` created a unique index on `settlement_records(purchase_intent_id)`. Replay settlement queries and conflict recovery in `SimulationSettlementEngine` guarantee strict 1:1 settlement uniqueness per purchase intent.
+  - Stale worker handling in `PaymentExecutionWorker` verifies `worker_id` lease ownership on all intermediate state transitions (`updateExecutionWithLease`); stale workers are safely rejected with 409 `WORKER_LEASE_LOST`.
+  - Historical Phase 2 approvals do not auto-execute; re-approval is strictly idempotent, and execution requires an explicit request to `POST /api/v1/purchases/intents/:id/execute`.
+  - Disposable database verification: created fresh database `x402_disposable_test`, ran all 4 migrations (`0001` through `0004`), executed seeds, and dropped cleanly without resetting the primary development database.

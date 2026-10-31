@@ -71,7 +71,7 @@ export function evaluateAuthorizationGate(
   };
 
   // 1. Environment Safety Check (Simulation forbidden in production)
-  if (appEnv === 'production') {
+  if (appEnv === 'production' || process.env.NODE_ENV === 'production' || process.env.SIMULATION_MODE === 'false') {
     return {
       allowed: false,
       reasonCode: 'PRODUCTION_REFUSAL',

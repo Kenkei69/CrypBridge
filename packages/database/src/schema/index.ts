@@ -292,7 +292,7 @@ export const settlementRecords = pgTable(
   },
   (table) => [
     index('settlement_records_payment_attempt_idx').on(table.paymentAttemptId),
-    index('settlement_records_intent_id_idx').on(table.purchaseIntentId),
+    uniqueIndex('settlement_records_intent_unique_idx').on(table.purchaseIntentId),
     index('settlement_records_execution_idx').on(table.paymentExecutionId),
   ]
 );
