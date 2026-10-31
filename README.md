@@ -1,4 +1,4 @@
-# x402 Guardian
+# x402 Guardian (CrypBridge)
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.2-black.svg)](https://fastify.dev/)
