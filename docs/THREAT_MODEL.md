@@ -63,6 +63,33 @@ x402 Guardian sits between autonomous AI purchasing agents, untrusted merchants,
   3. Changing payment options marks existing snapshots as superseded (`isSuperseded = true`).
   4. Idempotency keys prevent double execution on rapid user clicks.
 
+### Actor H: Merchant Term Tampering in 402 Challenge
+* **Vector**: A compromised or malicious merchant returns an HTTP 402 challenge where the requested amount exceeds the approved amount, the recipient address differs from the trusted merchant address, or an unapproved network/asset is demanded.
+* **Mitigation**:
+  1. The **Authorization Gate** parses the merchant's `PAYMENT-REQUIRED` header strictly.
+  2. Compares demanded recipient against `snapshot.trustedRecipientAddress` (case-insensitive hex check).
+  3. Compares demanded amount against `snapshot.exactAmount` (BigInt string equality).
+  4. Any discrepancy halts execution immediately, marking the execution as `BLOCKED` with code `MERCHANT_REQUIREMENTS_MISMATCH`. No payment signature is ever produced.
+
+### Actor I: Settlement Ambiguity & Network Interruption (Double-Charge Risk)
+* **Vector**: An HTTP settlement request completes on the ledger/merchant, but the HTTP response drops in transit. A naive client retries the settlement, causing a double-payment.
+* **Mitigation**:
+  1. The worker marks interrupted executions as `RECONCILIATION_REQUIRED`.
+  2. Retries invoke `reconcileOutcome()` against the persistent settlement ledger (`settlement_records`), detecting existing settlements by authorization ID and transitioning to `SIMULATION_COMPLETED` without re-authorizing or re-settling.
+
+### Actor J: Unauthorized Signer Invocation & Mainnet Leakage
+* **Vector**: An attacker attempts to invoke the signing subsystem directly or targets a live mainnet network to cause real fund loss.
+* **Mitigation**:
+  1. There is no public signing endpoint. The signer can only be invoked by internal worker processes with a valid `approvalSnapshotId`.
+  2. `ConstrainedSimulationSigner` enforces `isProductionTarget()`, throwing `SIGNER_REFUSED_PRODUCTION` if pointed at mainnet chains.
+  3. Signatures are simulated HMAC-SHA256 integrity tokens; no live private keys exist in the system.
+
+### Actor K: Runaway Execution & System Compromise
+* **Vector**: Anomalous behavior or active exploitation requires immediate, global suspension of payment execution.
+* **Mitigation**:
+  1. Global administrative emergency kill switch (`POST /api/v1/admin/kill-switch`).
+  2. When active, the Authorization Gate immediately refuses all pending executions with `KILL_SWITCH_ACTIVE`.
+
 ---
 
 ## 3. Threat Mitigation Summary Matrix
@@ -70,21 +97,24 @@ x402 Guardian sits between autonomous AI purchasing agents, untrusted merchants,
 | Threat Vector | Severity | Architectural Defense | Test Evidence |
 | :--- | :--- | :--- | :--- |
 | **Catalog Price Manipulation** | Critical | Server-derived catalog pricing in `POST /api/v1/purchases/intents` | `catalog_and_purchases.test.ts` |
-| **Cross-Tenant Data Snooping** | High | Auth token `sub` derivation + query-level ownership checks | `isolation_and_ownership.test.ts` |
+| **Cross-Tenant Data Snooping** | High | Auth token `sub` derivation + query-level ownership checks | `isolation_and_ownership.test.ts`, `phase3_payment_engine.test.ts` |
 | **SSRF to Cloud Metadata / LAN** | High | `DefaultDestinationPolicy` private IP and host allowlist validation | `config_and_security.test.ts` |
-| **Arbitrary Payload Signing** | Critical | No arbitrary signing endpoint; signers bind only to immutable snapshots | `write_semantics_and_fabrication.test.ts` |
-| **Simulation in Production** | High | Fail-fast runtime guard on production initialization | `config_and_security.test.ts` |
+| **Arbitrary Payload Signing** | Critical | No arbitrary signing endpoint; signers bind only to immutable snapshots | `write_semantics_and_fabrication.test.ts`, `phase3_payment_engine.test.ts` |
+| **Simulation in Production** | High | Fail-fast runtime guard on production initialization & mainnet refusal | `config_and_security.test.ts`, `phase3_payment_engine.test.ts` |
 | **Audit Log Tampering** | Medium | Append-only RLS policy and non-existent CRUD update routes | `write_semantics_and_fabrication.test.ts` |
-| **Floating Point Precision Loss** | Medium | Integer base-unit strings and `NUMERIC(78, 0)` database representation | `catalog_and_purchases.test.ts`, `phase2_approval_and_assistant.test.ts` |
-| **Conversational Prompt Injection** | High | Sanitized parsing, pattern detection, and lack of spending privileges | `phase2_approval_and_assistant.test.ts` |
-| **Concurrent / Stale Approval Race** | High | `FOR UPDATE` pessimistic row lock + `expectedVersion` optimistic check | `phase2_approval_and_assistant.test.ts` |
-| **Payment Option Tampering** | High | Payment option ID validation against product ID; authoritative terms lookup | `phase2_approval_and_assistant.test.ts` |
+| **Floating Point Precision Loss** | Medium | Integer base-unit strings and `NUMERIC(78, 0)` database representation | `phase2_approval_and_assistant.test.ts`, `phase3_payment_engine.test.ts` |
+| **Merchant Term Tampering** | Critical | Pre-signing Authorization Gate equality check | `phase3_payment_engine.test.ts` |
+| **Dropped Packet Double Charge** | High | Settlement ledger query & `RECONCILIATION_REQUIRED` recovery | `phase3_payment_engine.test.ts` |
+| **Unpinned Network Execution** | Medium | Strict pinned execution boundary (`UNSUPPORTED_EXECUTION_COMBINATION`) | `phase3_payment_engine.test.ts` |
+| **Systemic Runaway Execution** | High | Global administrative emergency kill switch (`KILL_SWITCH_ACTIVE`) | `phase3_payment_engine.test.ts` |
 
 ---
 
-## 4. Known Boundaries & Limitations (Phase 2)
+## 4. Known Boundaries & Limitations (Phase 3)
 
 1. **Database Administrator Privilege**:
    As PostgreSQL role `postgres` possesses `BYPASS RLS`, superuser connections technically bypass table-level RLS. Application-level ownership checks guarantee isolation during application runtime.
-2. **Phase 2 Payment Boundary**:
-   Phase 2 concludes strictly at purchase authorization. The state `"Purchase approved — payment has not been executed."` is enforced. No private keys are held or invoked, no signatures are produced, and no blockchain transactions are broadcast. Phase 3 will introduce wallet integration and verified signing.
+2. **Phase 3 Simulation Scope**:
+   Phase 3 operates strictly in simulation mode. No live wallets, private keys, or real blockchain transactions are utilized. All payment execution signatures are server-side HMAC-SHA256 integrity tokens, and all settlement hashes are deterministic simulation identifiers (`sim_settlement_<authId>`).
+3. **Pinned Network Restriction**:
+   The execution engine supports Base Sepolia USDC (`eip155:84532`). Alternative catalog payment options (e.g. Base Mainnet `eip155:8453`, Solana Devnet `solana:devnet`) can be previewed but execution halts with `UNSUPPORTED_EXECUTION_COMBINATION`. Multi-chain execution support is deferred to subsequent phases.

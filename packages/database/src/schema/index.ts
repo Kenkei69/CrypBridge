@@ -275,11 +275,12 @@ export const settlementRecords = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     paymentAttemptId: uuid('payment_attempt_id')
-      .notNull()
       .references(() => paymentAttempts.id, { onDelete: 'cascade' }),
     purchaseIntentId: uuid('purchase_intent_id')
       .notNull()
       .references(() => purchaseIntents.id, { onDelete: 'cascade' }),
+    paymentExecutionId: uuid('payment_execution_id')
+      .references(() => paymentExecutions.id, { onDelete: 'set null' }),
     assetIdentifier: text('asset_identifier').notNull(),
     networkIdentifier: text('network_identifier').notNull(),
     amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
@@ -292,6 +293,77 @@ export const settlementRecords = pgTable(
   (table) => [
     index('settlement_records_payment_attempt_idx').on(table.paymentAttemptId),
     index('settlement_records_intent_id_idx').on(table.purchaseIntentId),
+    index('settlement_records_execution_idx').on(table.paymentExecutionId),
+  ]
+);
+
+// 10b. Payment Executions (Phase 3: Durable state machine for approved payments)
+export const paymentExecutions = pgTable(
+  'payment_executions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => profiles.id, { onDelete: 'cascade' }),
+    purchaseIntentId: uuid('purchase_intent_id')
+      .notNull()
+      .references(() => purchaseIntents.id, { onDelete: 'cascade' }),
+    approvalSnapshotId: uuid('approval_snapshot_id')
+      .notNull()
+      .references(() => approvalSnapshots.id, { onDelete: 'restrict' }),
+    executionStatus: text('execution_status').notNull().default('QUEUED'), // 'QUEUED' | 'VALIDATING' | 'SIMULATING_AUTHORIZATION' | 'SETTLING_SIMULATION' | 'SIMULATION_COMPLETED' | 'BLOCKED' | 'FAILED' | 'EXPIRED' | 'CANCELED' | 'RECONCILIATION_REQUIRED'
+    fulfillmentStatus: text('fulfillment_status').notNull().default('NOT_STARTED'), // 'NOT_STARTED' | 'DELIVERED' | 'DELIVERY_FAILED'
+    networkIdentifier: text('network_identifier').notNull(),
+    assetIdentifier: text('asset_identifier').notNull(),
+    amount: numeric('amount', { precision: 78, scale: 0 }).notNull(),
+    recipientAddress: text('recipient_address').notNull(),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references(() => merchants.id, { onDelete: 'restrict' }),
+    resourceId: text('resource_id'),
+    authorizationId: text('authorization_id'),
+    settlementReference: text('settlement_reference'),
+    idempotencyKey: text('idempotency_key'),
+    failureCode: text('failure_code'),
+    failureReason: text('failure_reason'),
+    reconciliationAttempts: integer('reconciliation_attempts').notNull().default(0),
+    lastReconciledAt: timestamp('last_reconciled_at', { withTimezone: true }),
+    deliveredResource: jsonb('delivered_resource'),
+    workerId: text('worker_id'),
+    workerLeaseExpiresAt: timestamp('worker_lease_expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('payment_executions_purchase_intent_unique_idx').on(table.purchaseIntentId),
+    index('payment_executions_user_id_idx').on(table.userId),
+    index('payment_executions_status_idx').on(table.executionStatus),
+    index('payment_executions_lease_idx').on(table.workerLeaseExpiresAt),
+    index('payment_executions_settlement_ref_idx').on(table.settlementReference),
+    index('payment_executions_idempotency_idx').on(table.idempotencyKey),
+  ]
+);
+
+// 10c. Mock Merchant Resources (Phase 3: Demonstration paywalled assets delivered upon verified payment)
+export const mockMerchantResources = pgTable(
+  'mock_merchant_resources',
+  {
+    id: text('id').primaryKey(), // e.g. 'res_gpu_h100_compute'
+    productId: uuid('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    merchantId: uuid('merchant_id')
+      .notNull()
+      .references(() => merchants.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    content: text('content').notNull(),
+    mimeType: text('mime_type').notNull().default('application/json'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('mock_merchant_resources_product_id_idx').on(table.productId),
+    index('mock_merchant_resources_merchant_id_idx').on(table.merchantId),
   ]
 );
 
@@ -391,6 +463,10 @@ export const purchaseIntentsRelations = relations(purchaseIntents, ({ one, many 
   approvalSnapshots: many(approvalSnapshots),
   guardianDecisions: many(guardianDecisions),
   paymentAttempts: many(paymentAttempts),
+  paymentExecution: one(paymentExecutions, {
+    fields: [purchaseIntents.id],
+    references: [paymentExecutions.purchaseIntentId],
+  }),
 }));
 
 export const approvalSnapshotsRelations = relations(approvalSnapshots, ({ one, many }) => ({
@@ -415,4 +491,36 @@ export const approvalSnapshotsRelations = relations(approvalSnapshots, ({ one, m
     references: [productPaymentOptions.id],
   }),
   paymentAttempts: many(paymentAttempts),
+  paymentExecutions: many(paymentExecutions),
+}));
+
+export const paymentExecutionsRelations = relations(paymentExecutions, ({ one, many }) => ({
+  user: one(profiles, {
+    fields: [paymentExecutions.userId],
+    references: [profiles.id],
+  }),
+  purchaseIntent: one(purchaseIntents, {
+    fields: [paymentExecutions.purchaseIntentId],
+    references: [purchaseIntents.id],
+  }),
+  approvalSnapshot: one(approvalSnapshots, {
+    fields: [paymentExecutions.approvalSnapshotId],
+    references: [approvalSnapshots.id],
+  }),
+  merchant: one(merchants, {
+    fields: [paymentExecutions.merchantId],
+    references: [merchants.id],
+  }),
+  settlementRecords: many(settlementRecords),
+}));
+
+export const mockMerchantResourcesRelations = relations(mockMerchantResources, ({ one }) => ({
+  product: one(products, {
+    fields: [mockMerchantResources.productId],
+    references: [products.id],
+  }),
+  merchant: one(merchants, {
+    fields: [mockMerchantResources.merchantId],
+    references: [merchants.id],
+  }),
 }));

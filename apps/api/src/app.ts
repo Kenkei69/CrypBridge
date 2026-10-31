@@ -12,6 +12,7 @@ import { catalogRoutes } from './modules/catalog/index.js';
 import { conversationRoutes } from './modules/conversations/index.js';
 import { purchaseRoutes } from './modules/purchases/index.js';
 import { historyRoutes } from './modules/history/index.js';
+import { mockMerchantRoutes } from './modules/mock-merchant/index.js';
 
 export async function buildApp(customConfig?: Partial<EnvConfig>): Promise<FastifyInstance> {
   const config = customConfig ? { ...getConfig(), ...customConfig } : getConfig();
@@ -64,8 +65,21 @@ export async function buildApp(customConfig?: Partial<EnvConfig>): Promise<Fasti
       }
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-request-id',
+      'payment-required',
+      'payment-signature',
+      'payment-response',
+    ],
+    exposedHeaders: [
+      'x-request-id',
+      'payment-required',
+      'payment-signature',
+      'payment-response',
+    ],
   });
 
   // Global Rate Limiting
@@ -85,6 +99,7 @@ export async function buildApp(customConfig?: Partial<EnvConfig>): Promise<Fasti
   await app.register(conversationRoutes);
   await app.register(purchaseRoutes);
   await app.register(historyRoutes, { config });
+  await app.register(mockMerchantRoutes);
 
   return app;
 }

@@ -14,6 +14,7 @@ import type {
   PurchaseIntent,
   AuditEvent,
   ApprovalPreview,
+  PaymentExecution,
 } from '@x402/shared';
 import { Shield, ShieldAlert, CheckCircle2, AlertOctagon } from 'lucide-react';
 
@@ -36,11 +37,12 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
-  // Phase 2 Purchase Intent & Approval State
+  // Phase 2 & 3 Purchase Intent, Approval & Execution State
   const [intents, setIntents] = useState<PurchaseIntent[]>([]);
   const [intentsLoading, setIntentsLoading] = useState(false);
   const [activeIntent, setActiveIntent] = useState<PurchaseIntent | null>(null);
   const [approvalPreview, setApprovalPreview] = useState<ApprovalPreview | null>(null);
+  const [activeExecution, setActiveExecution] = useState<PaymentExecution | null>(null);
   const [approvalLoading, setApprovalLoading] = useState(false);
 
   // Security History
@@ -135,19 +137,21 @@ export default function Home() {
     setIntents([]);
     setActiveIntent(null);
     setApprovalPreview(null);
+    setActiveExecution(null);
     setAuditEvents([]);
   };
 
-  // 4. Fetch Approval Preview for an Intent
+  // 4. Fetch Approval Preview for an Intent (with Execution State)
   const fetchApprovalPreview = useCallback(
     async (intentId: string) => {
       if (!token) return;
       try {
-        const res = await apiFetch<{ preview: ApprovalPreview }>(
-          `/api/v1/purchases/intents/${intentId}/preview`,
-          { token }
-        );
+        const res = await apiFetch<{
+          preview: ApprovalPreview;
+          execution?: PaymentExecution | null;
+        }>(`/api/v1/purchases/intents/${intentId}/preview`, { token });
         setApprovalPreview(res.preview);
+        setActiveExecution(res.execution || null);
       } catch (err) {
         console.error('Failed to load approval preview:', err);
       }
@@ -373,6 +377,7 @@ export default function Home() {
         status: string;
         message: string;
         snapshot: any;
+        execution?: PaymentExecution | null;
       }>(`/api/v1/purchases/intents/${activeIntent.id}/approve`, {
         method: 'POST',
         token,
@@ -380,11 +385,37 @@ export default function Home() {
       });
 
       setStatusNotification(res.message);
+      if (res.execution) {
+        setActiveExecution(res.execution);
+      }
       await fetchApprovalPreview(activeIntent.id);
       loadUserData();
     } catch (err: any) {
       alert(`Approval error: ${err?.message || err}`);
       await fetchApprovalPreview(activeIntent.id);
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  const handleRetryExecution = async (executionId: string) => {
+    if (!token) return;
+    try {
+      setApprovalLoading(true);
+      const res = await apiFetch<{ result: any }>(
+        `/api/v1/purchases/executions/${executionId}/retry`,
+        {
+          method: 'POST',
+          token,
+        }
+      );
+      setStatusNotification('Execution retry processed successfully.');
+      if (activeIntent) {
+        await fetchApprovalPreview(activeIntent.id);
+      }
+      loadUserData();
+    } catch (err: any) {
+      alert(`Retry failed: ${err?.message || err}`);
     } finally {
       setApprovalLoading(false);
     }
@@ -496,10 +527,12 @@ export default function Home() {
           catalogProducts={products as any}
           activeIntent={activeIntent}
           approvalPreview={approvalPreview}
+          execution={activeExecution}
           onSelectProduct={handleSelectProduct}
           onSelectOption={handleSelectOption}
           onApprove={handleApprove}
           onReject={handleReject}
+          onRetryExecution={handleRetryExecution}
           approvalLoading={approvalLoading}
         />
 
@@ -513,13 +546,13 @@ export default function Home() {
           />
         </div>
 
-        {/* Phase 2 Security Trust Boundaries Reference */}
+        {/* Phase 3 Security Trust Boundaries Reference */}
         <div className="p-5 rounded-xl bg-surface/40 border border-gray-800/80 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-gray-300 uppercase tracking-wider">
             <ShieldAlert className="w-4 h-4 text-blue-400" />
-            <span>Phase 2 Verified Trust Boundaries</span>
+            <span>Phase 3 Verified Trust Boundaries</span>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-gray-400">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs text-gray-400">
             <div className="p-3 bg-gray-950/40 rounded-lg border border-gray-900 space-y-1">
               <span className="font-semibold text-gray-200">1. AI Language Separation</span>
               <p>
@@ -535,7 +568,13 @@ export default function Home() {
             <div className="p-3 bg-gray-950/40 rounded-lg border border-gray-900 space-y-1">
               <span className="font-semibold text-gray-200">3. Immutable Approval Snapshot</span>
               <p>
-                Explicit user approval creates one immutable snapshot bound to the exact intent version. Phase 2 stops at approval; payment execution and signing remain disabled.
+                Explicit user approval creates one immutable snapshot bound to the exact intent version. The snapshot acts as an authoritative firewall gate.
+              </p>
+            </div>
+            <div className="p-3 bg-gray-950/40 rounded-lg border border-gray-900 space-y-1">
+              <span className="font-semibold text-gray-200">4. Pinned x402 V2 Engine</span>
+              <p>
+                Strictly pinned to USDC on Base Sepolia (eip155:84532) exact scheme. Refuses all real funds, production operation, and live blockchain signing.
               </p>
             </div>
           </div>

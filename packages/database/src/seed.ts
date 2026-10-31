@@ -1,12 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from './client.js';
-import { merchants, products, productPaymentOptions } from './schema/index.js';
+import { merchants, products, productPaymentOptions, mockMerchantResources } from './schema/index.js';
 import { eq } from 'drizzle-orm';
 
 export interface SeedResult {
   merchantsCount: number;
   productsCount: number;
   paymentOptionsCount: number;
+  resourcesCount: number;
 }
 
 export async function runSeed(connectionString?: string): Promise<SeedResult> {
@@ -284,18 +285,121 @@ export async function runSeed(connectionString?: string): Promise<SeedResult> {
       }
     }
 
+    // Seed Mock Merchant Demonstration Resources (Phase 3 paywalled resources)
+    const seedResources = [
+      {
+        id: 'res_gpu_h100_compute',
+        productId: '44444444-4444-4444-4444-444444444441',
+        merchantId: '11111111-1111-1111-1111-111111111111',
+        name: 'Cloud GPU H100 Instance Access',
+        description: 'Demonstration cluster access credentials and interactive web notebook endpoint',
+        content: JSON.stringify({
+          clusterId: 'gpu-cluster-h100-demo-99',
+          sshCommand: 'ssh -i ~/.ssh/x402-demo demo-user@gpu-cluster-99.demo.cloudcomputecorp.internal',
+          jupyterUrl: 'https://jupyter-gpu99.demo.cloudcomputecorp.internal/?token=sim_demo_token_84532_h100',
+          allocatedGpus: 1,
+          gpuModel: 'NVIDIA H100 80GB SXM5',
+          durationMinutes: 60,
+          notice: 'Demonstration Resource — No actual hardware slice or real billing occurred.',
+        }),
+        mimeType: 'application/json',
+      },
+      {
+        id: 'res_high_ram_compute',
+        productId: '44444444-4444-4444-4444-444444444442',
+        merchantId: '11111111-1111-1111-1111-111111111111',
+        name: 'High-RAM Compute Node Access',
+        description: 'Dedicated 512GB RAM bare-metal slice configuration',
+        content: JSON.stringify({
+          instanceId: 'ram-node-512gb-demo-01',
+          sshCommand: 'ssh -i ~/.ssh/x402-demo admin@ram-node-01.demo.cloudcomputecorp.internal',
+          memoryMb: 524288,
+          cpuCores: 64,
+          notice: 'Demonstration Resource — Simulation environment only.',
+        }),
+        mimeType: 'application/json',
+      },
+      {
+        id: 'res_llm_inference_credits',
+        productId: '44444444-4444-4444-4444-444444444443',
+        merchantId: '22222222-2222-2222-2222-222222222222',
+        name: 'Model Host Labs API Key',
+        description: 'Prepaid 1,000,000 token API credential for high-throughput inference',
+        content: JSON.stringify({
+          apiKey: 'mhl_sim_live_key_990142_tier1_demo',
+          baseUrl: 'https://api.modelhostlabs.demo.internal/v1',
+          tokenQuota: 1000000,
+          models: ['llama-3.3-70b-instruct', 'deepseek-r1-distill'],
+          notice: 'Demonstration API Key — Simulated inference tier.',
+        }),
+        mimeType: 'application/json',
+      },
+      {
+        id: 'res_model_weights',
+        productId: '44444444-4444-4444-4444-444444444444',
+        merchantId: '22222222-2222-2222-2222-222222222222',
+        name: 'Fine-Tuned Checkpoint Download Token',
+        description: 'Signed storage manifest and SHA256 checksum for model weights',
+        content: JSON.stringify({
+          manifestUrl: 'https://storage.modelhostlabs.demo.internal/checkpoints/ft-security-v2.tar.gz',
+          downloadToken: 'dl_token_sim_6628174_expires_24h',
+          sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          sizeBytes: 14829104820,
+          notice: 'Demonstration Model Weights — Simulation download link.',
+        }),
+        mimeType: 'application/json',
+      },
+      {
+        id: 'res_threat_feed',
+        productId: '44444444-4444-4444-4444-444444444445',
+        merchantId: '33333333-3333-3333-3333-333333333333',
+        name: 'Real-Time Threat Intelligence Webhook',
+        description: 'Streaming websocket endpoint and HMAC webhook secret',
+        content: JSON.stringify({
+          wsEndpoint: 'wss://stream.threatfeed.demo.internal/v1/security-events',
+          webhookSecret: 'sec_wh_sim_9182371928_secret',
+          feedCategories: ['drainer_addresses', 'phishing_domains', 'prompt_injection_signatures'],
+          notice: 'Demonstration Threat Feed — Simulation stream credential.',
+        }),
+        mimeType: 'application/json',
+      },
+      {
+        id: 'res_adversarial_probe',
+        productId: '44444444-4444-4444-4444-444444444446',
+        merchantId: '33333333-3333-3333-3333-333333333333',
+        name: 'Adversarial Security Audit Report',
+        description: 'Diagnostic payload verification and test report',
+        content: JSON.stringify({
+          reportId: 'rep_adv_probe_001',
+          scanStatus: 'completed_sanitized',
+          findings: ['Zero model spending authority verified', 'Authoritative catalog pricing enforced'],
+          notice: 'Demonstration Security Report — Test fixture.',
+        }),
+        mimeType: 'application/json',
+      },
+    ];
+
+    for (const res of seedResources) {
+      const existing = await db.select().from(mockMerchantResources).where(eq(mockMerchantResources.id, res.id));
+      if (existing.length === 0) {
+        await db.insert(mockMerchantResources).values(res);
+      }
+    }
+
     const seededMerchants = await db.select().from(merchants);
     const seededProducts = await db.select().from(products);
     const seededOptions = await db.select().from(productPaymentOptions);
+    const seededResourcesList = await db.select().from(mockMerchantResources);
 
     console.log(
-      `[seed] Seed completed successfully. Merchants: ${seededMerchants.length}, Products: ${seededProducts.length}, Payment Options: ${seededOptions.length}`
+      `[seed] Seed completed successfully. Merchants: ${seededMerchants.length}, Products: ${seededProducts.length}, Payment Options: ${seededOptions.length}, Resources: ${seededResourcesList.length}`
     );
 
     return {
       merchantsCount: seededMerchants.length,
       productsCount: seededProducts.length,
       paymentOptionsCount: seededOptions.length,
+      resourcesCount: seededResourcesList.length,
     };
   } finally {
     await close();

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { SafeContentRenderer } from './SafeContentRenderer';
 import { CompactApprovalCard } from './CompactApprovalCard';
-import type { Message, Conversation, ApprovalPreview, Product, PaymentOption } from '@x402/shared';
+import type { Message, Conversation, ApprovalPreview, Product, PaymentOption, PaymentExecution } from '@x402/shared';
 
 interface ChatPurchasingProps {
   conversations: Conversation[];
@@ -28,10 +28,12 @@ interface ChatPurchasingProps {
   catalogProducts?: (Product & { paymentOptions?: PaymentOption[] })[];
   activeIntent?: any | null;
   approvalPreview?: ApprovalPreview | null;
+  execution?: PaymentExecution | null;
   onSelectProduct?: (product: any) => Promise<void>;
   onSelectOption?: (optionId: string) => Promise<void>;
   onApprove?: (expectedVersion: number) => Promise<void>;
   onReject?: (reason?: string) => Promise<void>;
+  onRetryExecution?: (executionId: string) => Promise<void>;
   approvalLoading?: boolean;
 }
 
@@ -46,10 +48,12 @@ export function ChatPurchasing({
   catalogProducts = [],
   activeIntent = null,
   approvalPreview = null,
+  execution = null,
   onSelectProduct,
   onSelectOption,
   onApprove,
   onReject,
+  onRetryExecution,
   approvalLoading = false,
 }: ChatPurchasingProps) {
   const [newTitle, setNewTitle] = useState('');
@@ -309,10 +313,12 @@ export function ChatPurchasing({
                 <div className="my-4">
                   <CompactApprovalCard
                     preview={approvalPreview}
+                    execution={execution}
                     loading={approvalLoading}
                     onApprove={onApprove}
                     onReject={onReject}
                     onSelectOption={onSelectOption}
+                    onRetryExecution={onRetryExecution}
                   />
                 </div>
               )}

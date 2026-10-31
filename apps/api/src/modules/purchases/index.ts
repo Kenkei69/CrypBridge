@@ -7,6 +7,7 @@ import {
   profiles,
   productPaymentOptions,
   approvalSnapshots,
+  paymentExecutions,
 } from '@x402/database/schema';
 import {
   AppError,
@@ -14,12 +15,20 @@ import {
   SelectPaymentOptionSchema,
   ApprovePurchaseIntentSchema,
   RejectPurchaseIntentSchema,
+  ProcessPaymentExecutionSchema,
+  KillSwitchSchema,
   UuidSchema,
   type ApprovalPreview,
 } from '@x402/shared';
+import { getConfig } from '../../config/env.js';
 import { recordAuditEvent } from '../audit/auditService.js';
+import { PaymentExecutionWorker } from '../payment-engine/paymentExecutionWorker.js';
+import { getKillSwitchStatus, setKillSwitch } from '../payment-engine/killSwitch.js';
 
 export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
+  const env = getConfig();
+  const worker = new PaymentExecutionWorker(app.db, env.APP_ENV);
+
   // Ensure profile exists helper
   async function ensureProfile(userId: string, email: string) {
     const existing = await app.db.select().from(profiles).where(eq(profiles.id, userId)).limit(1);
@@ -311,6 +320,26 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
         throw AppError.notFound('Purchase Intent');
       }
 
+      // Phase 3 Safety: Reject changing option if a payment execution is currently in-flight
+      const [existingExec] = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(eq(paymentExecutions.purchaseIntentId, intentId))
+        .limit(1);
+
+      if (existingExec && ['VALIDATING', 'SIMULATING_AUTHORIZATION', 'SETTLING_SIMULATION'].includes(existingExec.executionStatus)) {
+        throw AppError.badRequest(
+          `Cannot change payment option while payment execution is in-flight (current status: ${existingExec.executionStatus}).`
+        );
+      }
+
+      // If an earlier execution exists, remove it so the new terms can be re-approved cleanly
+      if (existingExec) {
+        await app.db
+          .delete(paymentExecutions)
+          .where(eq(paymentExecutions.id, existingExec.id));
+      }
+
       // Fetch requested payment option and verify it belongs to this product
       const [option] = await app.db
         .select()
@@ -454,6 +483,13 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
         )
         .limit(1);
 
+      // Check existing execution if already started
+      const [executionRecord] = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(eq(paymentExecutions.purchaseIntentId, intentId))
+        .limit(1);
+
       const decimals = selectedOption?.decimals || 6;
       const displayAmount = formatBaseUnits(intent.proposedAmount, decimals);
       const recipientAddress = selectedOption?.trustedRecipientAddress || merchant.trustedRecipientAddress;
@@ -482,7 +518,7 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
         simulatedNotice: 'Simulation mode — no payment is executed or signed.',
       };
 
-      return { preview };
+      return { preview, execution: executionRecord || null };
     }
   );
 
@@ -498,7 +534,7 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
       if (!parsed.success) {
         throw parsed.error;
       }
-      const { expectedVersion, idempotencyKey } = parsed.data;
+      const { expectedVersion, idempotencyKey, mockMerchantFault } = parsed.data;
 
       // Execute approval atomically inside a transaction with row lock
       const result = await app.db.transaction(async (tx) => {
@@ -529,9 +565,16 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
               .limit(1);
 
             if (existingSnapshot) {
+              const [existingExecution] = await tx
+                .select()
+                .from(paymentExecutions)
+                .where(eq(paymentExecutions.purchaseIntentId, intentId))
+                .limit(1);
+
               return {
                 status: 'approved',
                 snapshot: existingSnapshot,
+                execution: existingExecution || null,
                 message: 'Purchase approved — payment has not been executed.',
                 idempotent: true,
               };
@@ -659,13 +702,73 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
           userAgent: (request.headers['user-agent'] as string) || null,
         });
 
+        // Phase 3: Create PaymentExecution record atomically with approval
+        const [execution] = await tx
+          .insert(paymentExecutions)
+          .values({
+            userId,
+            purchaseIntentId: intent.id,
+            approvalSnapshotId: snapshot.id,
+            executionStatus: 'QUEUED',
+            fulfillmentStatus: 'NOT_STARTED',
+            networkIdentifier: intent.networkIdentifier,
+            assetIdentifier: intent.assetIdentifier,
+            amount: intent.proposedAmount,
+            recipientAddress,
+            merchantId: intent.merchantId,
+            resourceId: product.id,
+            idempotencyKey: idempotencyKey || null,
+          })
+          .returning();
+
+        if (!execution) {
+          throw new AppError('Failed to create payment execution record', 'INTERNAL_ERROR', 500);
+        }
+
+        await recordAuditEvent(tx, {
+          userId,
+          eventType: 'PAYMENT_EXECUTION_QUEUED',
+          actorType: 'user',
+          resourceType: 'payment_execution',
+          resourceId: execution.id,
+          payload: {
+            purchaseIntentId: intent.id,
+            approvalSnapshotId: snapshot.id,
+            amount: intent.proposedAmount,
+            networkIdentifier: intent.networkIdentifier,
+          },
+          ipAddress: request.ip || null,
+          userAgent: (request.headers['user-agent'] as string) || null,
+        });
+
         return {
           status: 'approved',
           snapshot,
+          execution,
           message: 'Purchase approved — payment has not been executed.',
           idempotent: false,
         };
       });
+
+      // If newly approved and execution was queued, automatically trigger processing
+      if (!result.idempotent && result.execution) {
+        try {
+          await worker.processExecution(result.execution.id, {
+            mockMerchantFault,
+          });
+          // Fetch updated execution state
+          const [updatedExec] = await app.db
+            .select()
+            .from(paymentExecutions)
+            .where(eq(paymentExecutions.id, result.execution.id))
+            .limit(1);
+          if (updatedExec) {
+            result.execution = updatedExec;
+          }
+        } catch (err: any) {
+          app.log.warn({ err, executionId: result.execution.id }, 'Initial execution processing encountered error');
+        }
+      }
 
       return reply.status(200).send(result);
     }
@@ -705,6 +808,21 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
             )
           );
 
+        // Cancel any queued execution if not yet started
+        await tx
+          .update(paymentExecutions)
+          .set({
+            executionStatus: 'CANCELED',
+            failureReason: 'Purchase intent rejected by user',
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(paymentExecutions.purchaseIntentId, intentId),
+              eq(paymentExecutions.executionStatus, 'QUEUED')
+            )
+          );
+
         const [updatedIntent] = await tx
           .update(purchaseIntents)
           .set({
@@ -734,6 +852,177 @@ export async function purchaseRoutes(app: FastifyInstance): Promise<void> {
           intent: updatedIntent,
         };
       });
+    }
+  );
+
+  // GET /api/v1/purchases/executions/:id - Get execution details
+  app.get<{ Params: { id: string } }>(
+    '/api/v1/purchases/executions/:id',
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const executionId = UuidSchema.parse(request.params.id);
+      const userId = request.user.id;
+
+      const [execution] = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(and(eq(paymentExecutions.id, executionId), eq(paymentExecutions.userId, userId)))
+        .limit(1);
+
+      if (!execution) {
+        throw AppError.notFound('Payment Execution');
+      }
+
+      const [intent] = await app.db
+        .select()
+        .from(purchaseIntents)
+        .where(eq(purchaseIntents.id, execution.purchaseIntentId))
+        .limit(1);
+
+      const [snapshot] = await app.db
+        .select()
+        .from(approvalSnapshots)
+        .where(eq(approvalSnapshots.id, execution.approvalSnapshotId))
+        .limit(1);
+
+      return {
+        execution,
+        intent: intent || null,
+        snapshot: snapshot || null,
+      };
+    }
+  );
+
+  // GET /api/v1/purchases/executions - List owned executions
+  app.get(
+    '/api/v1/purchases/executions',
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const userId = request.user.id;
+
+      const list = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(eq(paymentExecutions.userId, userId))
+        .orderBy(desc(paymentExecutions.createdAt));
+
+      return {
+        executions: list,
+        total: list.length,
+      };
+    }
+  );
+
+  // POST /api/v1/purchases/executions/:id/process - Trigger/resume execution processing
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/purchases/executions/:id/process',
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const executionId = UuidSchema.parse(request.params.id);
+      const userId = request.user.id;
+
+      const parsed = ProcessPaymentExecutionSchema.safeParse(request.body || {});
+      const mockMerchantFault = parsed.success ? parsed.data.mockMerchantFault : undefined;
+
+      const [execution] = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(and(eq(paymentExecutions.id, executionId), eq(paymentExecutions.userId, userId)))
+        .limit(1);
+
+      if (!execution) {
+        throw AppError.notFound('Payment Execution');
+      }
+
+      const result = await worker.processExecution(executionId, { mockMerchantFault });
+      return { result };
+    }
+  );
+
+  // POST /api/v1/purchases/executions/:id/retry - Safe retry for delivery or reconciliation
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/purchases/executions/:id/retry',
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const executionId = UuidSchema.parse(request.params.id);
+      const userId = request.user.id;
+
+      const result = await worker.retryExecution(executionId, userId);
+      return { result };
+    }
+  );
+
+  // GET /api/v1/purchases/executions/:id/resource - View delivered paywalled resource
+  app.get<{ Params: { id: string } }>(
+    '/api/v1/purchases/executions/:id/resource',
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const executionId = UuidSchema.parse(request.params.id);
+      const userId = request.user.id;
+
+      const [execution] = await app.db
+        .select()
+        .from(paymentExecutions)
+        .where(and(eq(paymentExecutions.id, executionId), eq(paymentExecutions.userId, userId)))
+        .limit(1);
+
+      if (!execution) {
+        throw AppError.notFound('Payment Execution');
+      }
+
+      if (execution.executionStatus !== 'SIMULATION_COMPLETED' || execution.fulfillmentStatus !== 'DELIVERED') {
+        throw AppError.badRequest(
+          `Resource is not accessible. Execution status: ${execution.executionStatus}, fulfillment: ${execution.fulfillmentStatus}`
+        );
+      }
+
+      return {
+        resource: execution.deliveredResource,
+        settlementReference: execution.settlementReference,
+        simulated: true,
+      };
+    }
+  );
+
+  // POST /api/v1/admin/kill-switch - Emergency kill switch toggle
+  app.post(
+    '/api/v1/admin/kill-switch',
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const parsed = KillSwitchSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw parsed.error;
+      }
+
+      const { enabled, reason } = parsed.data;
+      setKillSwitch(enabled, reason);
+
+      await recordAuditEvent(app.db, {
+        userId: request.user.id,
+        eventType: 'KILL_SWITCH_TRIGGERED',
+        actorType: 'user',
+        resourceType: 'system',
+        resourceId: 'global_kill_switch',
+        payload: {
+          enabled,
+          reason: reason || null,
+        },
+      });
+
+      return {
+        success: true,
+        killSwitch: getKillSwitchStatus(),
+      };
+    }
+  );
+
+  // GET /api/v1/admin/kill-switch - Get emergency kill switch status
+  app.get(
+    '/api/v1/admin/kill-switch',
+    async () => {
+      return {
+        killSwitch: getKillSwitchStatus(),
+      };
     }
   );
 }

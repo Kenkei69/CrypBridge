@@ -151,28 +151,29 @@ External merchant requirements are validated, normalized, and reconciled against
 
 ## 6. Compatibility Matrix & Specification
 
-x402 Guardian adheres to the official x402 draft specification version `draft-v1`.
+x402 Guardian adheres strictly to the modern **x402 V2 wire protocol specification** for payment execution.
 
-| Dimension | Supported in Phase 1 | Future Phase Target | Unsupported / Rejected |
+| Dimension | Supported in Phase 3 Execution | Future Phase Target | Unsupported / Rejected |
 | :--- | :--- | :--- | :--- |
-| **Specification Version** | `draft-v1` | `v1.0` | `v0.1`, custom variants |
-| **Payment Scheme** | `exact-payment-v1` | `streaming-payment-v1`, `subscription-v1` | `arbitrary-transfer` |
-| **Networks** | `eip155:84532` (Base Sepolia), `solana:devnet`, `eip155:8453` (Base Mainnet) | Arbitrum, Polygon | Unverified chains |
-| **Assets** | `USDC` (6 decimals base units) | `EURC`, `cbBTC` | Floating point tokens, unbacked tokens |
-| **Monetary Representation** | `NUMERIC(78, 0)` base-unit integer strings | `NUMERIC(78, 0)` | Floats, IEEE 754 numbers |
+| **Specification Version** | `2` (`x402Version: 2`) | Version negotiation | `1`, custom variants |
+| **Payment Scheme** | `exact` | `streaming`, `subscription` | `arbitrary-transfer` |
+| **Networks** | `eip155:84532` (Base Sepolia - Pinned) | Base Mainnet `eip155:8453`, Solana Devnet `solana:devnet` | Unverified chains (rejected with `UNSUPPORTED_EXECUTION_COMBINATION`) |
+| **Assets** | `USDC` (Base Sepolia contract `0x036CbD53842c5426634e7929541eC2318f3dCF7e`) | `EURC`, `cbBTC` | Floating point tokens, unbacked tokens |
+| **Monetary Representation** | `NUMERIC(78, 0)` base-unit integer strings (6 decimals) | `NUMERIC(78, 0)` | Floats, IEEE 754 numbers |
+| **Wire Transport** | Base64-encoded UTF-8 JSON in `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, `PAYMENT-RESPONSE` | Binary CBOR | Corrupt Base64, payloads > 64KB |
 
 ---
 
 ## 7. Integration Interfaces
 
-Phase 1 provides strict TypeScript interfaces for integration modules:
+Phase 1 and Phase 3 provide strict TypeScript interfaces for integration modules:
 - [`IMerchantPaymentRequirementService`](file:///home/runner/workspace/packages/shared/src/types/integration.ts#L17)
 - [`ControlledDestinationPolicy`](file:///home/runner/workspace/packages/shared/src/types/integration.ts#L10)
 - [`IGuardianEvaluationEngine`](file:///home/runner/workspace/packages/shared/src/types/integration.ts#L21)
 - [`IPaymentSigner`](file:///home/runner/workspace/packages/shared/src/types/integration.ts#L32)
 - [`ISettlementAdapter`](file:///home/runner/workspace/packages/shared/src/types/integration.ts#L37)
 
-Simulation implementations ([`SimulationPaymentSigner`](file:///home/runner/workspace/apps/api/src/modules/integrations/mockSigner.ts#L11) and [`SimulationSettlementAdapter`](file:///home/runner/workspace/apps/api/src/modules/integrations/settlementAdapter.ts#L8)) reject instantiation if `APP_ENV === 'production'`.
+Simulation implementations ([`SimulationPaymentSigner`](file:///home/runner/workspace/apps/api/src/modules/integrations/mockSigner.ts#L11), [`ConstrainedSimulationSigner`](file:///home/runner/workspace/apps/api/src/modules/payment-engine/constrainedSigner.ts), and [`SimulationSettlementAdapter`](file:///home/runner/workspace/apps/api/src/modules/payment-engine/simulationSettlementAdapter.ts)) reject instantiation and execution if `APP_ENV === 'production'` or if a production network identifier is targeted (`SIGNER_REFUSED_PRODUCTION`).
 
 ---
 
@@ -190,7 +191,7 @@ stateDiagram-v2
     Draft --> Rejected: Explicit user rejection with recorded reason
     Approved --> Rejected: Explicit user rejection with recorded reason
     Rejected --> [*]: Terminal state (no further approvals allowed)
-    Approved --> [*]: Authorization complete (payment execution withheld until Phase 3)
+    Approved --> [*]: Authorization complete
 ```
 
 ### Assistant Architecture & Live Provider Scope
@@ -201,13 +202,63 @@ stateDiagram-v2
 - **Demonstration Merchants & Verification Scope**:
   The seeded merchants (`Cloud Compute Corp`, `Model Host Labs`, `Secure Data API`) are demonstration data fixtures. The database attribute `isTrusted: true` designates demo catalog authorization for test scenarios; it does not constitute real-world legal, financial, or third-party cryptographic verification.
 
-### Concurrency & Locking Architecture
-To guarantee that payments cannot be approved against stale prices, modified options, or through concurrent duplicate clicks:
-1. **Pessimistic Row Locking**: When `POST /api/v1/purchases/intents/:id/approve` is called, the transaction locks the intent record with:
-   ```sql
-   SELECT * FROM purchase_intents WHERE id = :id FOR UPDATE;
-   ```
-2. **Optimistic Version Verification**: The request must supply `expectedVersion`. If `intent.version !== expectedVersion`, the server aborts the transaction with `VERSION_CONFLICT` (HTTP 409).
-3. **Idempotency Support**: Repeated requests with the same `idempotencyKey` or repeated clicks on an already approved intent return the existing immutable snapshot safely without duplicate insertion.
-4. **Approval Supersession**: If a user switches payment options on an intent that was previously approved, the backend marks existing approval snapshots for that intent as superseded (`isSuperseded = true`), increments `version`, and transitions status back to `'draft'`.
-5. **Exact Approved Notice**: Approval terminates strictly with the notice `"Purchase approved — payment has not been executed."` No wallet private keys or settlement calls are invoked.
+---
+
+## 9. Phase 3 Simulated x402 Payment Engine Architecture
+
+Phase 3 implements an end-to-end, durable, simulated payment execution engine that processes explicit approvals through the x402 V2 protocol lifecycle.
+
+### State Machine Lifecycle
+```mermaid
+stateDiagram-v2
+    [*] --> QUEUED: Atomically created on POST /approve
+    QUEUED --> VALIDATING: Worker acquires lease
+    VALIDATING --> BLOCKED: Term tampering / Unpinned network / Kill switch active
+    VALIDATING --> SIMULATING_AUTHORIZATION: Terms match snapshot exactly
+    SIMULATING_AUTHORIZATION --> SETTLING_SIMULATION: Constrained signer emits HMAC token
+    SETTLING_SIMULATION --> SIMULATION_COMPLETED: Mock merchant responds 200 + resource
+    SETTLING_SIMULATION --> RECONCILIATION_REQUIRED: Network dropped / lost_response
+    RECONCILIATION_REQUIRED --> SIMULATION_COMPLETED: Reconciled via settlement ledger
+    SIMULATION_COMPLETED --> [*]: Resource delivered (DELIVERED)
+    BLOCKED --> [*]: Zero-loss boundary enforced
+```
+
+### Engine Subsystems & Security Controls
+
+1. **Pre-Signing Authorization Gate (`authorizationGate.ts`)**:
+   - Compares merchant 402 requirements against the server's immutable `approval_snapshots`.
+   - Validates user ownership (`snapshot.userId === execution.userId`).
+   - Verifies snapshot status is `'active'` and has not expired.
+   - Enforces exact string/BigInt match on amount, asset, network, and recipient address.
+   - Checks the emergency kill switch status before authorizing any payment.
+
+2. **Constrained Simulation Signer (`constrainedSigner.ts`)**:
+   - Generates deterministic simulated authorization IDs (`sim_auth_<uuid>`).
+   - Issues server-side HMAC-SHA256 integrity tokens over authorization terms (`${authId}:${network}:${asset}:${amount}:${payTo}`).
+   - Contains a hardcoded safety check (`isProductionTarget`) that throws `SIGNER_REFUSED_PRODUCTION` if pointed at Ethereum Mainnet (`eip155:1`), Base Mainnet (`eip155:8453`), or Solana Mainnet (`solana:mainnet-beta`).
+
+3. **Controlled Mock Merchant (`mockMerchantService.ts`)**:
+   - Implements x402 V2 protocol: returns HTTP 402 with Base64 `PAYMENT-REQUIRED` on unsigned requests, and HTTP 200 with `PAYMENT-RESPONSE` when supplied with a valid `PAYMENT-SIGNATURE`.
+   - Supports configurable test fault injection (`corrupt_requirements`, `lost_response`, `delivery_failure`).
+
+4. **Worker Leases & Concurrency Protection**:
+   - Atomic worker lease acquisition via PostgreSQL conditional updates:
+     ```sql
+     UPDATE payment_executions
+     SET worker_instance_id = :workerId, worker_lease_expires_at = NOW() + INTERVAL '30 seconds'
+     WHERE id = :id AND (worker_lease_expires_at IS NULL OR worker_lease_expires_at < NOW());
+     ```
+   - Prevents option switching during in-flight states (`VALIDATING`, `SIMULATING_AUTHORIZATION`, `SETTLING_SIMULATION`).
+
+5. **Settlement Ledger & Ambiguous Outcome Reconciliation**:
+   - Immutable `settlement_records` table linked directly to payment executions.
+   - In ambiguous network conditions (`lost_response`), execution halts in `RECONCILIATION_REQUIRED`.
+   - Reconcile endpoint (`POST /api/v1/purchases/executions/:id/retry`) queries the persistent settlement ledger and recovers the completed state without duplicate payment.
+
+6. **Paywalled Demonstration Resource Delivery**:
+   - Real paywalled payloads seeded in PostgreSQL (`mock_merchant_resources`).
+   - Delivers compute credentials, reasoning API tokens, and threat feed bundles upon verified settlement.
+   - Delivery failures allow safe retry without re-settling.
+
+7. **Administrative Emergency Kill Switch (`killSwitch.ts`)**:
+   - Global toggle (`POST /api/v1/admin/kill-switch`) that halts all execution processing across the system with code `KILL_SWITCH_ACTIVE`.

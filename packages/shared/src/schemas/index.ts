@@ -35,6 +35,16 @@ export const SelectPaymentOptionSchema = z.object({
 export const ApprovePurchaseIntentSchema = z.object({
   expectedVersion: z.number().int().positive('Expected version must be a positive integer'),
   idempotencyKey: z.string().trim().min(1).max(128).optional(),
+  mockMerchantFault: z
+    .enum([
+      'timeout',
+      'lost_response',
+      'settlement_rejected',
+      'resource_delivery_fail',
+      'corrupt_requirements',
+      'price_tamper',
+    ])
+    .optional(),
 });
 
 export const RejectPurchaseIntentSchema = z.object({
@@ -63,4 +73,68 @@ export const TestTokenRequestSchema = z.object({
   email: z.string().email(),
   displayName: z.string().max(80).optional(),
   expiresInSeconds: z.number().int().min(10).max(86400).default(3600),
+});
+
+export const ProcessPaymentExecutionSchema = z.object({
+  idempotencyKey: z.string().trim().min(1).max(128).optional(),
+  mockMerchantFault: z
+    .enum([
+      'timeout',
+      'lost_response',
+      'settlement_rejected',
+      'resource_delivery_fail',
+      'corrupt_requirements',
+      'price_tamper',
+    ])
+    .optional(),
+});
+
+export const RetryPaymentExecutionSchema = z.object({
+  mode: z.enum(['reconcile', 'resource_delivery']).default('reconcile'),
+});
+
+export const KillSwitchSchema = z.object({
+  enabled: z.boolean(),
+  reason: z.string().max(200).optional(),
+});
+
+export const X402V2RequirementItemSchema = z.object({
+  scheme: z.string().min(1).max(50),
+  network: z.string().min(1).max(50),
+  amount: BaseUnitAmountSchema,
+  asset: z.string().min(1).max(100),
+  payTo: z.string().min(1).max(120),
+  maxTimeoutSeconds: z.number().int().positive().max(3600).optional(),
+  extra: z.record(z.unknown()).optional(),
+});
+
+export const X402V2PaymentRequiredSchema = z.object({
+  x402Version: z.literal(2),
+  error: z.string().max(500).optional(),
+  resource: z.object({
+    url: z.string().max(2048),
+    description: z.string().max(500).optional(),
+    mimeType: z.string().max(100).optional(),
+  }),
+  accepts: z.array(X402V2RequirementItemSchema).min(1),
+  extensions: z.record(z.unknown()).optional(),
+});
+
+export const X402V2PaymentPayloadSchema = z.object({
+  x402Version: z.literal(2),
+  accepted: X402V2RequirementItemSchema,
+  payload: z.object({
+    authorizationId: z.string().min(1),
+    signature: z.string().min(1),
+    timestamp: z.string(),
+    intentId: UuidSchema,
+    approvalSnapshotId: UuidSchema,
+    approvalVersion: z.number().int().positive(),
+    simulated: z.literal(true),
+    extra: z.record(z.unknown()).optional(),
+  }),
+  resource: z.object({
+    url: z.string(),
+  }).optional(),
+  extensions: z.record(z.unknown()).optional(),
 });
