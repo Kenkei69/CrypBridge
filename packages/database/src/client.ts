@@ -11,6 +11,7 @@ export function createDatabase(connectionString?: string) {
   }
 
   const client = postgres(url, {
+    ...(process.env.DATABASE_PASSWORD ? { password: process.env.DATABASE_PASSWORD } : {}),
     max: 10,
     idle_timeout: 20,
     connect_timeout: 10,

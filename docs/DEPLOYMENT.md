@@ -33,3 +33,7 @@ Enable provider log retention, failure alerts and database backups. Avoid collec
 ## Remaining account setup
 
 The repository does not create cloud accounts, purchase hosting, configure SMTP, or populate secrets. These must be done in provider dashboards before a live end-to-end release can be verified. A successful build alone does not certify a public launch.
+
+## Passwords containing URL-special characters
+
+Set DATABASE_URL to the session-pooler URL without a password, for example `postgresql://postgres.PROJECT_REF@POOLER_HOST:5432/postgres?sslmode=require`, and store the exact database password separately as DATABASE_PASSWORD. The PostgreSQL client and migration runner pass this secret directly to the driver, so no manual URL encoding is needed. Never put DATABASE_PASSWORD in a NEXT_PUBLIC variable.

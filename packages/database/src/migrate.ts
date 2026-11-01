@@ -14,7 +14,7 @@ export async function runMigrations(connectionString?: string): Promise<void> {
   }
 
   console.log('[migrate] Connecting to database...');
-  const sql = postgres(url, { max: 1 });
+  const sql = postgres(url, { max: 1, ...(process.env.DATABASE_PASSWORD ? { password: process.env.DATABASE_PASSWORD } : {}) });
 
   try {
     const possibleDirs = [
