@@ -1,149 +1,96 @@
-# CrypBridge — x402 Guardian
+> **Active milestone: advanced financial simulation.** See [implementation, acceptance evidence, invariants and limitations](docs/ADVANCED_SIMULATION_ENGINE.md). Default `CRYPBRIDGE_MODE=simulation` disables real signing/submission and the public-chain worker. Earlier real-testnet/UI reports below are historical and are retained for reference.
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![Fastify](https://img.shields.io/badge/Fastify-5.2-black.svg)](https://fastify.dev/)
-[![Next.js](https://img.shields.io/badge/Next.js-14.2-black.svg)](https://nextjs.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16.10-336791.svg)](https://www.postgresql.org/)
-[![Tests](https://img.shields.io/badge/Tests-102%20Passing-emerald.svg)](./apps/api/src/tests)
+> Active MVP: real Base Sepolia USDC/x402 implementation. See [verified implementation, acceptance results and blockers](docs/REAL_TESTNET_IMPLEMENTATION.md). Earlier simulation descriptions below are historical. No successful CrypBridge on-chain purchase is claimed; the provisioned buyer is unfunded.
 
-x402 Guardian protects AI-assisted purchases by checking proposed payments against trusted user authorization before signing or onchain settlement.
+# x402 Red/Blue
 
----
+A working, persistent x402 purchasing and attack simulation platform with a clearly labeled **Test Environment**. Blue Team owns user confirmation, payment policies, and the signing boundary. Red Team injects untrusted merchant inputs into the same simulation. All signing proofs, balances, transfers, and delivered resources are explicitly simulated; no real cryptocurrency, private keys, blockchain RPC, or paid AI service is used.
 
-## Architecture Overview
+## Start
 
-x402 Guardian is architected as a modular monorepo:
+Node 20.19+ and PostgreSQL 16:
 
-- **`packages/shared`**: Shared contracts, domain types, Zod schemas, stable error codes, x402 V2 wire contracts, Guardian policy types, Execution Permits, and Base64 transport utilities.
-- **`packages/database`**: Drizzle schema, SQL migrations, seed scripts, connection pool, spending reservation records, Guardian decision logs, and Row-Level Security (RLS) policies.
-- **`apps/api`**: Fastify backend API with AI assistant service (`DeterministicDemoAdapter`), catalog search, payment option switching, simulated x402 payment engine, Blue Team Guardian security engine, atomic spending reservations, HMAC-based cryptographic execution permits, pre-signing Authorization Gate, constrained simulation signer, simulation settlement adapter, mock merchant service, and emergency kill switch.
-- **`apps/web`**: Next.js 14 & Tailwind CSS dashboard featuring conversational purchasing chat, inline product recommendations, compact authoritative approval cards with Guardian verification badges and accordion checks, budget allowance meter, option switching, in-flight processing animation, simulated settled cards, reconciliation recovery, paywalled demonstration resource modal inspector, security history panel with Guardian decision explorer, and state rehydration.
-
-For complete architectural details, see [docs/ARCHITECTURE.md](file:///home/runner/workspace/docs/ARCHITECTURE.md), [docs/THREAT_MODEL.md](file:///home/runner/workspace/docs/THREAT_MODEL.md), [docs/GUARDIAN_POLICY.md](file:///home/runner/workspace/docs/GUARDIAN_POLICY.md), [docs/GUARDIAN_TEST_MATRIX.md](file:///home/runner/workspace/docs/GUARDIAN_TEST_MATRIX.md), and [docs/X402_COMPATIBILITY.md](file:///home/runner/workspace/docs/X402_COMPATIBILITY.md).
-
----
-
-## Quickstart & Local Setup
-
-### Prerequisites
-- Node.js 20+
-- pnpm 9+
-- PostgreSQL 15+
-
-### 1. Configure Environment Variables
-Copy `.env.example` to `.env` and verify the values:
-
-```bash
+```sh
+npm ci
 cp .env.example .env
+# Configure DATABASE_URL, then start PostgreSQL (or use an existing instance):
+docker compose up -d
+npm run db:setup
+npm run dev
 ```
 
-Key variables:
-- `DATABASE_URL`: PostgreSQL connection string (e.g. `postgresql://postgres:postgres@localhost:5432/x402_guardian`)
-- `SUPABASE_JWT_SECRET`: Secret key for JWT verification (minimum 16 characters)
-- `SIMULATION_MODE`: `true` (enforces simulation mode throughout engine execution)
-- `ALLOWED_ORIGINS`: Comma-separated allowed origins (e.g. `http://localhost:3000`)
+Frontend: http://localhost:5000 · API/mock merchant: http://localhost:3001
 
-### 2. Install Dependencies
-```bash
-pnpm install
+`db:setup` preserves existing records, seeds missing merchants/resources and the isolated buyer, and installs database immutability triggers. Fresh deployments can use `npx prisma migrate deploy && npx tsx server/seed.ts` instead. Databases previously initialized with `db push` need migration baselining before `migrate deploy`.
+
+## Run the demonstration
+
+1. Open `/red-team/attack-builder`, choose Overpayment, and click **Arm Attack**. The plan waits for the next matching authorized test payment.
+2. Open `/blue-team/ai-agent` and ask **Buy me a research report about AI security.**
+3. Select a catalog product, choose the supported USDC / Base Sepolia method, and review the compact payment request.
+4. Click **Approve**. Payment processing, attack delivery, and Guardian evaluation run automatically.
+5. Guardian blocks the altered amount before signing. The chat shows one blocked receipt with the exact rule and the actual authorized/attempted payment fields.
+6. Use **Take Action** for evidence, local reporting, investigation storage, permission restriction, and address monitoring.
+7. Repeat with no armed attack for a legitimate simulated settlement and resource delivery. Refresh to restore persisted conversations and receipts.
+
+Full current workflow and verification commands: [automatic checkout](docs/AUTOMATIC_CHECKOUT.md). All funds and settlements remain simulated. Unsupported payment methods are unavailable.
+
+## Implemented attacks
+
+- **Overpayment:** altered V2 amount is checked against immutable user approval.
+- **Wrong recipient:** altered payee is checked against the approved merchant.
+- **Prompt injection:** content is recorded as untrusted data, never as authority. Only the original purchase can settle; no additional payment is created.
+- **Duplicate payment:** repeated signed merchant HTTP retries or completed-purchase probes produce one ledger charge. Concurrent processing is serialized.
+- **Malicious contract approval:** actual ERC-20 approve calldata is decoded; supported mock Permit/Permit2 envelopes are inspected. Unauthorized contract calls, unknown spenders and unlimited allowances are rejected before signing.
+
+## Tests
+
+```sh
+npm test
+npm run build
+npx playwright install chromium
+npm run test:ui:simulation
+npm run test:ui
 ```
 
-### 3. Run Database Migrations & Seed
-```bash
-# Run schema migrations and Row-Level Security policies
-pnpm db:migrate
+Unit/integration tests automatically create, seed, and drop a disposable PostgreSQL schema; the configured database user needs schema-create permissions. Browser tests use the running API and persist actual mock test records. They should run against a dedicated demo deployment when a pristine catalog or balance is required.
 
-# Seed trusted merchants, verified catalog products, and multi-option payment methods
-pnpm db:seed
-```
+`UI_BASE_URL` selects an actual preview/deployment URL. `PLAYWRIGHT_CHROMIUM_EXECUTABLE` can select an installed Chromium binary. The default browser target is port 5000. Both new simulation and retained legacy browser tests are included.
 
-### 4. Run Test Suite
-Runs the 102 automated tests against the real PostgreSQL database:
-```bash
-pnpm test
-```
+## Origin and preview repair
 
-### 5. Typecheck & Build
-```bash
-pnpm typecheck
-pnpm build
-```
+The previous API allowed localhost:5173 while the running frontend used port 5000 and a Replit HTTPS hostname. Exact supported local origins and deployment-provided Replit domains (including the frontend’s explicit HTTPS :5000 preview origin) are now included, with optional exact `APP_ORIGIN` / comma-separated `APP_ORIGINS`. No wildcard origin or request-supplied Host/X-Forwarded-Host is trusted. Cross-site origins and suffix lookalikes remain rejected.
 
-### 6. Start Development Servers
-In two separate terminals:
-```bash
-# Fastify API (http://localhost:4000)
-pnpm dev:api
+A second preview bug came from Vite reloading the page whenever `.local/state/workflow-logs` changed. Runtime logs, caches, backend files, and test artifacts are now excluded from frontend watching. Vite uses a strict port and exact preview hosts.
 
-# Next.js Web UI (http://localhost:3000)
-pnpm dev:web
-```
+Requests distinguish `ORIGIN_REJECTED`, `AUTHENTICATION_REQUIRED`, `SESSION_REQUIRED`, `WORKSPACE_FORBIDDEN`, `VALIDATION_ERROR`, invalid simulation stages, merchant errors, and settlement failures.
 
----
+## Authentication and environment
 
-## API Capabilities
+See [.env.example](.env.example). Demo mode uses a shared persisted demo operator with server-created, opaque, expiring, HttpOnly/SameSite workspace-session cookies. Switching teams is explicitly permitted to that demo operator; a Red-scoped session cannot call Blue mutation handlers. This is sandbox workspace separation, not a production multi-user identity system.
 
-| Route | Method | Auth Required | Description |
-| :--- | :--- | :--- | :--- |
-| `/live` | `GET` | No | Basic process liveness probe |
-| `/ready` | `GET` | No | Dependency readiness check (verifies PostgreSQL connection) |
-| `/api/v1/auth/me` | `GET` | Yes (Bearer) | Verified current user profile and session restoration |
-| `/api/v1/auth/test-token` | `POST` | Dev/Test only | Generates signed test JWT (strictly disabled in production) |
-| `/api/v1/catalog/products` | `GET` | No | Active products with authoritative prices and payment options |
-| `/api/v1/catalog/search` | `GET` | No | Search products by keyword, category, and budget limit |
-| `/api/v1/catalog/products/:id/payment-options` | `GET` | No | Payment options for a specific catalog product |
-| `/api/v1/catalog/merchants` | `GET` | No | Verified trusted merchants and recipient addresses |
-| `/api/v1/conversations` | `POST`, `GET` | Yes (Bearer) | Create and list owned purchasing chat sessions |
-| `/api/v1/conversations/:id/messages` | `POST`, `GET` | Yes (Bearer) | Post and list messages within an owned conversation |
-| `/api/v1/conversations/:id/assistant-reply` | `POST` | Yes (Bearer) | Generate AI purchasing assistant response with catalog recommendations |
-| `/api/v1/purchases/intents` | `POST`, `GET` | Yes (Bearer) | Create draft intent (authoritative catalog pricing) & list owned intents |
-| `/api/v1/purchases/intents/:id/option` | `PATCH` | Yes (Bearer) | Switch payment option, increment version, and supersede earlier approvals |
-| `/api/v1/purchases/intents/:id/preview` | `GET` | Yes (Bearer) | Compact authoritative approval preview with execution state |
-| `/api/v1/purchases/intents/:id/approve` | `POST` | Yes (Bearer) | Atomically create snapshot, queue payment execution, and trigger worker |
-| `/api/v1/purchases/intents/:id/reject` | `POST` | Yes (Bearer) | Reject proposed purchase intent with explicit reason |
-| `/api/v1/purchases/executions` | `GET` | Yes (Bearer) | List owned payment executions |
-| `/api/v1/purchases/executions/:id` | `GET` | Yes (Bearer) | Get status and details of an owned execution |
-| `/api/v1/purchases/executions/:id/process` | `POST` | Yes (Bearer) | Resume or trigger processing on an execution |
-| `/api/v1/purchases/executions/:id/retry` | `POST` | Yes (Bearer) | Reconcile ambiguous outcome or retry failed resource delivery |
-| `/api/v1/purchases/executions/:id/resource` | `GET` | Yes (Bearer) | Inspect unlocked paywalled demonstration resource |
-| `/api/v1/admin/kill-switch` | `GET`, `POST` | Yes (Bearer) | Inspect or toggle global emergency kill switch |
-| `/api/v1/guardian/policies` | `GET`, `PUT` | Yes (Bearer) | Inspect and configure user spending policy limits and restrictions |
-| `/api/v1/guardian/budget` | `GET` | Yes (Bearer) | Inspect user spending budget, active reservations, and remaining allowance |
-| `/api/v1/guardian/decisions` | `GET` | Yes (Bearer) | Query explainable Guardian evaluation audit logs and block reasons |
-| `/api/v1/guardian/decisions/:id` | `GET` | Yes (Bearer) | Inspect detailed evaluation checks and snapshot diffs for a decision |
-| `/api/v1/mock-merchant/resources/:id` | `GET` | No | Mock merchant endpoint (returns 402 or 200 with resource) |
-| `/api/v1/history` | `GET` | Yes (Bearer) | Owned security audit events, intents, and simulation metadata |
+Outside demo mode, every API call requires `ADMIN_TOKEN`; mock routes additionally require `MOCK_SIMULATION_ENABLED=true`. The browser does not collect administrator tokens. Production operator access needs an authenticated proxy/client. Real wallet signing is not implemented or exposed.
 
----
+## Retained features and external guards
 
-## Security Invariants
+The earlier wallet configuration, native guard assessment suite, policy lab, filters, JSON/PDF assessment reports and guided demos remain at `/legacy`. Their test policies are independent of the purchasing guardian policies.
 
-1. **Untrusted AI Output**: Language model outputs and tool calls have zero spending authority.
-2. **Authoritative Catalog Pricing**: Creation and switching of purchase intents ignores client-provided amounts and recipients, sourcing values exclusively from verified database records.
-3. **Pessimistic & Optimistic Concurrency**: Approvals acquire transactional `FOR UPDATE` locks and verify `expectedVersion` to prevent race conditions and double spending.
-4. **Pre-Signing Authorization Gate & Guardian Engine**: The engine never produces payment signatures without passing through Blue Team Guardian policy evaluation (exact amount, recipient, network, token, and budget validation).
-5. **Atomic Spending Reservations**: Reservations are evaluated and created atomically using PostgreSQL row-level locks (`SELECT ... FOR UPDATE`), preventing concurrent overspending of daily budgets. Survives crashes and restarts via an explicit reservation lifecycle (`RESERVED` -> `COMMITTED` or `RELEASED`).
-6. **Worker Lease Monotonic Fencing**: A strictly increasing `fencing_token` is recorded on executions and checked on settlement, preventing stale, resurrected, or split-brain workers from generating duplicate settlements.
-7. **Independent Cryptographic Permit Enforcement**: The `ConstrainedSimulationSigner` independently validates an HMAC-SHA256 `ExecutionPermit` signed by the Guardian key before generating headers. Altered terms or missing permits are refused with `UNAUTHORIZED_PAYMENT_REQUEST`.
-8. **Constrained Simulation Signer**: The signer only emits HMAC-SHA256 integrity tokens and throws `SIGNER_REFUSED_PRODUCTION` if target network is a mainnet chain.
-9. **Pinned Protocol Combination**: Enforces x402 V2 (`x402Version: 2`), `exact` scheme, Base Sepolia (`eip155:84532`), and USDC (`0x036CbD53842c5426634e7929541eC2318f3dCF7e`).
-10. **Simulation Invariant**: Every result card, modal inspector, and API response explicitly states: *"Simulation Mode: No real funds were transferred. No blockchain transaction occurred."*
-11. **Crash & Ambiguity Reconciliation**: Dropped or lost merchant settlement responses transition to `RECONCILIATION_REQUIRED` and resolve idempotently against the persistent settlement ledger without duplicate payments.
+`/red-team/guard-testing` supports the explicitly versioned `x402-guard/1` adapter. Target origins must be approved on the server; DNS is pinned to a checked public IPv4 address; redirects/private destinations are rejected; credentials are environment references; timeout, malformed response and transport failures fail tests. Reports include the actual test envelope, response, reason and timing.
 
----
+**No organizer-specific external guard integration has been validated** because no organizer endpoint/contract/credentials were supplied. A different interface requires a separate versioned adapter implementation and validation. This is not presented as universal interoperability.
 
-## Documentation Index
+Local incident reporting, evidence storage, platform address watches, and the test response adapter are implemented. Real blockchain tracing and real exchange integrations are not configured.
 
-- [Architecture Specification](file:///home/runner/workspace/docs/ARCHITECTURE.md)
-- [Threat Model & Security Boundaries](file:///home/runner/workspace/docs/THREAT_MODEL.md)
-- [Guardian Policy Specification](file:///home/runner/workspace/docs/GUARDIAN_POLICY.md)
-- [Guardian Adversarial Test Matrix](file:///home/runner/workspace/docs/GUARDIAN_TEST_MATRIX.md)
-- [x402 V2 Protocol Compatibility](file:///home/runner/workspace/docs/X402_COMPATIBILITY.md)
-- [Phase 1 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_1_ACCEPTANCE.md)
-- [Phase 1 Completion Report](file:///home/runner/workspace/COMPLETION_REPORT.md)
-- [Phase 2 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_2_ACCEPTANCE.md)
-- [Phase 2 Completion Report](file:///home/runner/workspace/docs/PHASE_2_COMPLETION_REPORT.md)
-- [Phase 3 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_3_ACCEPTANCE.md)
-- [Phase 3 Completion Report](file:///home/runner/workspace/docs/PHASE_3_COMPLETION_REPORT.md)
-- [Phase 4 Acceptance Criteria & Evidence](file:///home/runner/workspace/docs/PHASE_4_ACCEPTANCE.md)
-- [Phase 4 Completion Report](file:///home/runner/workspace/docs/PHASE_4_COMPLETION_REPORT.md)
+## Protocol, deployment and architecture
+
+Official SDK encoders/decoders and V2 schemas handle the x402 headers and messages. The mock signer issues an opaque test proof with EIP-3009-shaped fields; it is **not** an EIP-712 signature or on-chain verification. The mock settlement response has an empty blockchain transaction field and an explicit ledger reference.
+
+For deployment, serve `dist/` with SPA fallback for all team routes, proxy `/api`, `/mock`, and `/ws` to the Node service, provide PostgreSQL and the exact application origin, and use HTTPS. Do not expose anonymous demo mode with real credentials or production wallets. No testnet payments or real settlements are enabled.
+
+Detailed design, API/state transitions, trust boundaries, and limitations: [architecture](docs/ARCHITECTURE.md), [adapter contract](docs/ADAPTER.md).
+
+## Persistent Guardian chat
+
+The current chat uses catalog discovery, explicit product selection, supported payment-method selection, trusted approval receipts, and automatically evaluated payments. Conversations and receipts are stored in PostgreSQL and synchronized with backend events. The active workflow replaces the earlier manual attack-window chat; legacy simulation endpoints are retained for existing assessment tooling.
+
+See [the current implementation notes](docs/AUTOMATIC_CHECKOUT.md) for lifecycle, isolation, incident-response behavior, and limitations.

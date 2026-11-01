@@ -1,0 +1,880 @@
+generator client {
+ provider = "prisma-client-js"
+}
+datasource db {
+ provider = "postgresql"
+ url = env("DATABASE_URL")
+}
+model Wallet {
+ id String @id @default(uuid())
+ name String
+ address String
+ network String @default("eip155:84532")
+ mode String @default("mock")
+ enabled Boolean @default(true)
+ createdAt DateTime @default(now())
+ agents Agent[]
+}
+model Agent {
+ id String @id @default(uuid())
+ name String
+ walletId String
+ wallet Wallet @relation(fields:[walletId],references:[id])
+ status String @default("active")
+ payments Payment[]
+}
+model Policy {
+ id String @id @default(uuid())
+ version Int @unique
+ config Json
+ createdAt DateTime @default(now())
+}
+model Payment {
+ id String @id @default(uuid())
+ agentId String
+ agent Agent @relation(fields:[agentId],references:[id])
+ amount String
+ decision String
+ risk Int
+ rules Json
+ envelope Json
+ mode String @default("mock")
+ createdAt DateTime @default(now())
+ @@index([createdAt])
+}
+model Nonce {
+ key String @id
+ createdAt DateTime @default(now())
+}
+model Spend {
+ key String @id
+ amount Decimal @db.Decimal(78,0)
+}
+model Guard {
+ authenticationReference String?
+ id String @id @default(uuid())
+ name String
+ endpoint String
+ adapterVersion String @default("x402-guard/1")
+ reports Report[]
+}
+model Report {
+ id String @id @default(uuid())
+ guardId String
+ guard Guard @relation(fields:[guardId],references:[id])
+ score Int
+ results Json
+ createdAt DateTime @default(now())
+}
+model Audit {
+ id String @id @default(uuid())
+ action String
+ data Json
+ createdAt DateTime @default(now())
+}
+
+model User {
+ id String @id @default(uuid())
+ email String @unique
+ name String
+ createdAt DateTime @default(now())
+ sessions WorkspaceSession[]
+ simulations Simulation[]
+ conversations Conversation[]
+}
+model WorkspaceSession {
+ sandboxId String?
+ id String @id @default(uuid())
+ tokenHash String @unique
+ userId String
+ user User @relation(fields:[userId],references:[id])
+ workspace String
+ expiresAt DateTime
+ @@index([expiresAt])
+}
+model Merchant {
+ id String @id
+ name String
+ recipient String
+ network String
+ asset String
+ decimals Int @default(6)
+ resources MockResource[]
+}
+model MockResource {
+ description String @default("")
+ id String @id
+ name String
+ price String
+ keywords Json
+ content String
+ merchantId String
+ merchant Merchant @relation(fields:[merchantId],references:[id])
+ simulations Simulation[]
+}
+model GuardianPolicy {
+ id String @id @default(uuid())
+ version Int @unique
+ config Json
+ createdAt DateTime @default(now())
+}
+model Simulation {
+ sandboxId String?
+ automatic Boolean @default(false)
+ conversationId String?
+ conversation Conversation? @relation(fields:[conversationId],references:[id])
+ chatTurnId String? @unique
+ chatTurn ChatTurn? @relation(fields:[chatTurnId],references:[id])
+ messages ChatMessage[]
+ id String @id @default(uuid())
+ userId String
+ user User @relation(fields:[userId],references:[id])
+ resourceId String
+ resource MockResource @relation(fields:[resourceId],references:[id])
+ walletId String
+ prompt String
+ stage String @default("AWAITING_APPROVAL")
+ proposal Json
+ original Json?
+ modified Json?
+ delivery Json?
+ windowExpiresAt DateTime?
+ retryOf String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ authorization PurchaseAuthorization?
+ decisions GuardDecision[]
+ attacks SimulationAttack[]
+ events SimulationEvent[]
+ signings MockSigning[]
+ transfer MockTransfer?
+ @@index([userId,createdAt])
+ @@index([stage])
+}
+model PurchaseAuthorization {
+ id String @id @default(uuid())
+ simulationId String @unique
+ simulation Simulation @relation(fields:[simulationId],references:[id])
+ amount String
+ recipient String
+ asset String
+ network String
+ scheme String
+ resourceUrl String
+ walletAddress String
+ expiresAt DateTime
+ approvedAt DateTime @default(now())
+ digest String
+}
+model GuardDecision {
+ id String @id @default(uuid())
+ simulationId String
+ simulation Simulation @relation(fields:[simulationId],references:[id])
+ decision String
+ rules Json
+ explanation String
+ fingerprint String
+ policyVersion Int
+ createdAt DateTime @default(now())
+ signings MockSigning[]
+ @@index([simulationId,createdAt])
+}
+model MockSigning {
+ id String @id @default(uuid())
+ simulationId String
+ simulation Simulation @relation(fields:[simulationId],references:[id])
+ decisionId String
+ decision GuardDecision @relation(fields:[decisionId],references:[id])
+ proofHash String @unique
+ fingerprint String
+ authorization Json
+ expiresAt DateTime
+ consumedAt DateTime?
+ createdAt DateTime @default(now())
+}
+model MockAccount {
+ id String @id
+ address String @unique
+ balance Decimal @db.Decimal(78,0)
+ outgoing MockTransfer[] @relation("debits")
+ incoming MockTransfer[] @relation("credits")
+}
+model MockTransfer {
+ id String @id @default(uuid())
+ simulationId String? @unique
+ simulation Simulation? @relation(fields:[simulationId],references:[id])
+ fromId String
+ from MockAccount @relation("debits",fields:[fromId],references:[id])
+ toId String
+ to MockAccount @relation("credits",fields:[toId],references:[id])
+ amount Decimal @db.Decimal(78,0)
+ kind String @default("payment")
+ createdAt DateTime @default(now())
+}
+model SimulationAttack {
+ id String @id @default(uuid())
+ simulationId String
+ simulation Simulation @relation(fields:[simulationId],references:[id])
+ category String
+ payload Json
+ original Json
+ modified Json
+ deliveryStatus String @default("delivered")
+ objective String @default("pending")
+ defenderDecision String?
+ reason String?
+ createdAt DateTime @default(now())
+ @@index([simulationId])
+}
+model SimulationEvent {
+ messages ChatMessage[]
+ sequence Int @unique @default(autoincrement())
+ id String @id @default(uuid())
+ simulationId String
+ simulation Simulation @relation(fields:[simulationId],references:[id])
+ type String
+ source String
+ data Json
+ createdAt DateTime @default(now())
+ @@index([simulationId,createdAt])
+}
+
+model Conversation {
+ sandboxId String?
+ id String @id @default(uuid())
+ userId String
+ user User @relation(fields:[userId],references:[id])
+ title String @default("New conversation")
+ context Json @default("{}")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ messages ChatMessage[]
+ turns ChatTurn[]
+ simulations Simulation[]
+ @@index([userId,updatedAt])
+}
+model ChatMessage {
+ id String @id @default(uuid())
+ sequence Int @unique @default(autoincrement())
+ conversationId String
+ conversation Conversation @relation(fields:[conversationId],references:[id])
+ simulationId String?
+ simulation Simulation? @relation(fields:[simulationId],references:[id])
+ eventId String?
+ event SimulationEvent? @relation(fields:[eventId],references:[id])
+ dedupKey String
+ type String
+ role String
+ content String
+ data Json @default("{}")
+ createdAt DateTime @default(now())
+ @@unique([conversationId,dedupKey])
+ @@index([conversationId,sequence])
+}
+model ChatTurn {
+ id String @id @default(uuid())
+ conversationId String
+ conversation Conversation @relation(fields:[conversationId],references:[id])
+ clientKey String
+ status String @default("PROCESSING")
+ simulation Simulation?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@unique([conversationId,clientKey])
+}
+
+model TestSandbox {
+ id String @id @default(uuid())
+ userId String
+ tokenHash String @unique
+ createdAt DateTime @default(now())
+}
+model ShoppingSelection {
+ id String @id @default(uuid())
+ conversationId String
+ userId String
+ sandboxId String
+ resourceId String
+ discoveryId String
+ clientKey String
+ stage String @default("PRODUCT_SELECTED")
+ method Json?
+ simulationId String? @unique
+ createdAt DateTime @default(now())
+ @@unique([conversationId,clientKey])
+}
+model PaymentJob {
+ id String @id @default(uuid())
+ simulationId String @unique
+ userId String
+ status String @default("QUEUED")
+ attempts Int @default(0)
+ error String?
+ createdAt DateTime @default(now())
+ startedAt DateTime?
+ finishedAt DateTime?
+}
+model AttackPlan {
+ id String @id @default(uuid())
+ userId String
+ sandboxId String
+ status String @default("DRAFT")
+ category String
+ payload Json
+ targetKind String
+ targetId String?
+ triggeredSimulationId String? @unique
+ attackId String?
+ result Json?
+ expiresAt DateTime
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ events AttackPlanEvent[]
+ @@index([userId,sandboxId,status,createdAt])
+}
+model AttackPlanEvent {
+ id String @id @default(uuid())
+ planId String
+ plan AttackPlan @relation(fields:[planId],references:[id])
+ status String
+ data Json
+ createdAt DateTime @default(now())
+}
+model Incident {
+ id String @id @default(uuid())
+ userId String
+ sandboxId String
+ simulationId String? @unique
+ kind String @default("BLOCKED_PAYMENT")
+ status String @default("OPEN")
+ evidence Json
+ createdAt DateTime @default(now())
+ actions IncidentAction[]
+}
+model IncidentAction {
+ id String @id @default(uuid())
+ incidentId String
+ incident Incident @relation(fields:[incidentId],references:[id])
+ kind String
+ data Json
+ createdAt DateTime @default(now())
+ @@unique([incidentId,kind])
+}
+model AddressWatch {
+ id String @id @default(uuid())
+ userId String
+ sandboxId String
+ address String
+ network String
+ incidentId String
+ createdAt DateTime @default(now())
+ @@unique([userId,sandboxId,address,network])
+}
+model AddressObservation {
+ id String @id @default(uuid())
+ watchId String
+ simulationId String
+ data Json
+ createdAt DateTime @default(now())
+ @@unique([watchId,simulationId])
+}
+
+// Real testnet records are intentionally isolated from legacy simulation tables.
+model ChainWallet {
+ role String @id
+ address String @unique
+ createdAt DateTime @default(now())
+}
+model LiveIntent {
+ id String @id @default(uuid())
+ userId String
+ clientKey String
+ buyer String
+ payTo String
+ amount String
+ resource String
+ state String @default("AWAITING_APPROVAL")
+ expiresAt DateTime
+ approvedAt DateTime?
+ nonce String @unique
+ requirements Json
+ payload Json?
+ txHash String? @unique
+ error String?
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@unique([userId,clientKey])
+}
+model LiveDecision {
+ id String @id @default(uuid())
+ userId String
+ intentId String
+ allowed Boolean
+ rules Json
+ binding String
+ attack String?
+ createdAt DateTime @default(now())
+}
+model LiveSigning {
+ intentId String @id
+ nonce String @unique
+ binding String
+ consumedAt DateTime @default(now())
+}
+model LiveSettlement {
+ nonce String @id
+ fromBlock BigInt
+ payer String
+ requirements Json
+ payload Json
+ state String
+ txHash String? @unique
+ error String?
+ createdAt DateTime @default(now())
+}
+model ChainTransaction {
+ hash String @id
+ blockNumber BigInt
+ blockHash String
+ status String
+ timestamp DateTime
+ confirmations Int
+}
+model UsdcTransfer {
+ id String @id
+ txHash String
+ logIndex Int
+ blockNumber BigInt
+ blockHash String
+ contract String
+ sender String
+ recipient String
+ amount String
+ timestamp DateTime
+ status String
+ @@unique([txHash,logIndex])
+ @@index([blockNumber])
+ @@index([sender])
+ @@index([recipient])
+}
+model ChainCheckpoint {
+ id String @id
+ startBlock BigInt @default(0)
+ blockHash String?
+ nextBlock BigInt
+ updatedAt DateTime @updatedAt
+}
+model LiveWatch {
+ id String @id @default(uuid())
+ userId String
+ address String
+ caseId String @default("")
+ startBlock BigInt
+ @@unique([userId,address,caseId])
+}
+model ScamCase {
+ id String @id @default(uuid())
+ userId String
+ txHash String
+ network String
+ suspect String
+ description String
+ evidence String
+ createdAt DateTime @default(now())
+}
+model InvestigationEdge {
+ id String @id
+ caseId String
+ transferId String
+ hop Int
+ evidenceSource String
+ attribution String @default("Confirmed transfer relationship; ownership and stolen-fund attribution unknown")
+ @@unique([caseId,transferId])
+}
+model LiveNotification {
+ sequence Int @id @default(autoincrement())
+ userId String
+ key String @unique
+ type String
+ data Json
+ createdAt DateTime @default(now())
+ @@index([userId,sequence])
+}
+
+// Advanced simulation v3: never read as public-chain or production-wallet state.
+model LabWorkspace {
+ id String @id
+ userId String
+ sandboxId String
+ environmentId String
+ @@unique([userId,sandboxId])
+}
+model LabEnvironment {
+ id String @id @default(uuid())
+ userId String
+ sandboxId String
+ kind String
+ seed String
+ engineVersion String
+ ruleVersion String
+ initial Json
+ clock Int @default(0)
+ head Int @default(0)
+ eventSequence Int @default(0)
+ purchaseSequence Int @default(0)
+ eventHash String @default("genesis")
+ createdAt DateTime @default(now())
+ @@index([userId,sandboxId])
+}
+model LabWallet {
+ id String @id
+ environmentId String
+ role String
+ address String
+ transactionNonce Int @default(0)
+ @@unique([environmentId,role])
+ @@unique([environmentId,address])
+}
+model LabBalance {
+ id String @id
+ environmentId String
+ walletId String
+ asset String
+ amount Decimal @db.Decimal(78,0)
+ @@unique([walletId,asset])
+}
+model LabLedger {
+ id String @id
+ environmentId String
+ transactionId String?
+ walletId String
+ asset String
+ delta Decimal @db.Decimal(78,0)
+ kind String
+ sequence Int
+ @@unique([environmentId,sequence])
+ @@index([walletId,asset])
+}
+model LabAllowance {
+ id String @id
+ environmentId String
+ walletId String
+ spender String
+ asset String
+ amount String
+}
+model LabProduct {
+ id String @id
+ merchantId String
+ merchantName String
+ merchantRole String
+ name String
+ description String
+ amount String
+ content String
+ keywords Json
+}
+model LabTask {
+ id String @id @default(uuid())
+ environmentId String
+ budget String
+ dailyLimit String
+ authorizedBy String
+ createdAt Int
+}
+model LabPurchase {
+ id String @id @default(uuid())
+ environmentId String
+ taskId String
+ userId String
+ clientKey String
+ ordinal Int
+ productId String
+ prompt String
+ state String @default("AWAITING_APPROVAL")
+ trusted Json
+ requirements Json
+ amount String
+ error String?
+ attackId String?
+ transactionId String?
+ createdAt Int
+ updatedAt Int
+ @@unique([environmentId,clientKey])
+ @@unique([environmentId,ordinal])
+}
+model LabAuthorization {
+ id String @id
+ environmentId String
+ purchaseId String @unique
+ userId String
+ merchantId String
+ productId String
+ amount String
+ recipient String
+ buyer String
+ asset String
+ network String
+ scheme String
+ resource String
+ createdAt Int
+ expiresAt Int
+ status String @default("ACTIVE")
+ digest String
+}
+model LabAttack {
+ id String @id @default(uuid())
+ environmentId String
+ userId String
+ category String
+ name String
+ status String
+ targetKind String
+ targetId String?
+ injectionStage String
+ config Json
+ expiresAt Int
+ triggeredPurchaseId String?
+ original Json?
+ modified Json?
+ result Json?
+ createdAt Int
+ @@index([environmentId,status])
+}
+model LabAttempt {
+ id String @id @default(uuid())
+ environmentId String
+ purchaseId String
+ attackId String?
+ key String
+ state String
+ original Json
+ modified Json
+ headers Json
+ verification Json?
+ result Json?
+ latency Int @default(0)
+ createdAt Int
+ @@unique([purchaseId,key])
+}
+model LabDecision {
+ id String @id @default(uuid())
+ environmentId String
+ purchaseId String
+ attemptId String
+ stage String
+ decision String
+ ruleVersion String
+ binding String
+ createdAt Int
+}
+model LabRuleResult {
+ id String @id @default(uuid())
+ decisionId String
+ ruleId String
+ version String
+ status String
+ evaluated Json
+ expected Json
+ explanation String
+ evidenceRef String
+ @@unique([decisionId,ruleId])
+}
+model LabSigning {
+ id String @id
+ environmentId String
+ purchaseId String
+ attemptId String @unique
+ authorizationId String @unique
+ nonce String
+ binding String
+ typedData Json
+ payload Json
+ signatureKind String
+ createdAt Int
+ @@unique([environmentId,nonce])
+}
+model LabNonce {
+ id String @id
+ environmentId String
+ signingId String @unique
+ authorizer String
+ nonce String
+ @@unique([environmentId,authorizer,nonce])
+}
+model LabSettlement {
+ id String @id
+ environmentId String
+ purchaseId String
+ attemptId String @unique
+ signingId String @unique
+ state String
+ verification Json
+ response Json
+ transactionId String? @unique
+}
+model LabBlock {
+ id String @id
+ environmentId String
+ number Int
+ hash String
+ parentHash String
+ timestamp Int
+ canonical Boolean @default(true)
+ @@index([environmentId,number])
+}
+model LabTransaction {
+ id String @id
+ tokenSender String
+ tokenRecipient String
+ environmentId String
+ purchaseId String?
+ blockId String
+ reference String
+ sender String
+ recipient String
+ contract String
+ tokenAmount String
+ value String
+ nonce Int
+ gasLimit String
+ gasUsed String
+ feePerGas String
+ calldata String
+ status String
+ confirmations Int
+ timestamp Int
+ authorizationRef String
+ operation String
+ @@index([environmentId,timestamp])
+ @@unique([environmentId,reference])
+}
+model LabLog {
+ id String @id
+ environmentId String
+ transactionId String
+ blockId String
+ index Int
+ contract String
+ topics Json
+ data String
+ decoded Json
+ status String
+ @@unique([transactionId,index])
+}
+model LabCheckpoint {
+ environmentId String @id
+ blockNumber Int
+ blockHash String
+ eventSequence Int
+}
+model LabIncident {
+ id String @id
+ environmentId String
+ purchaseId String?
+ attackId String?
+ classification String
+ evidence Json
+ status String @default("OPEN")
+ createdAt Int
+}
+model LabFlowEdge {
+ id String @id
+ environmentId String
+ logId String @unique
+ transactionId String
+ sender String
+ recipient String
+ amount String
+ timestamp Int
+ confidence String
+ evidence Json
+}
+model LabExchangeCase {
+ id String @id @default(uuid())
+ environmentId String
+ incidentId String
+ destination String
+ status String
+ request Json
+ response Json
+ createdAt Int
+}
+model LabEvent {
+ id String @id @default(uuid())
+ environmentId String
+ purchaseId String?
+ actor String
+ type String
+ relatedId String?
+ timestamp Int
+ sequence Int
+ metadata Json
+ previousHash String
+ integrity String
+ @@unique([environmentId,sequence])
+}
+model LabRun {
+ id String @id @default(uuid())
+ userId String
+ sandboxId String
+ environmentId String
+ category String
+ seed String
+ target String
+ config Json
+ snapshot Json
+ result Json
+ semanticDigest String
+ replayOf String?
+ createdAt DateTime @default(now())
+}
+model LabSnapshot {
+ id String @id @default(uuid())
+ environmentId String
+ label String
+ version String
+ data Json
+ digest String
+ createdAt DateTime @default(now())
+}
+model LabConversation {
+ id String @id @default(uuid())
+ environmentId String
+ clientKey String
+ title String
+ createdAt Int
+ @@unique([environmentId,clientKey])
+}
+model LabMessage {
+ id String @id @default(uuid())
+ environmentId String
+ conversationId String
+ clientKey String
+ role String
+ type String
+ content String
+ data Json
+ purchaseId String?
+ sequence Int
+ @@unique([conversationId,clientKey])
+ @@unique([environmentId,sequence])
+}
+model LabMovementAuthorization {
+ id String @id
+ environmentId String
+ fromRole String
+ recipient String
+ amount String
+ signatureKind String
+ approvedBy String
+ createdAt Int
+}
+model LabExecution {
+ id String @id
+ environmentId String
+ transactionId String @unique
+ authorizationRef String
+ state String
+ receipt Json
+}

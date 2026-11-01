@@ -1,0 +1,873 @@
+.sim-global-banner {
+  font-size: 10px;
+  letter-spacing: 0.35px;
+  text-align: center;
+  background: #f7faff;
+  border-top: 1px solid #eaf2ff;
+  border-bottom: 1px solid #eaf2ff;
+  padding: 8px 16px;
+  color: #626b7a;
+}
+.sim-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #dce9ff;
+  border-radius: 7px;
+  background: #f7faff;
+  color: #0866ff;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  padding: 6px 9px;
+  line-height: 1.6;
+}
+.cb-welcome > .sim-mode-badge {
+  margin-top: 18px;
+}
+.sim-chat-response {
+  margin: 22px 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.sim-chat-response > p {
+  color: #626b7a;
+  margin-bottom: 17px;
+}
+.sim-product-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sim-product-list > article {
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  border: 1px solid #e5e9f0;
+  border-radius: 14px;
+  padding: 20px;
+}
+.sim-product-icon {
+  height: 44px;
+  width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: #eaf2ff;
+  color: #0866ff;
+  flex-shrink: 0;
+}
+.sim-product-list > article > div:nth-child(2) {
+  flex: 1;
+}
+.sim-product-list h2 {
+  font-size: 15px;
+  letter-spacing: -0.3px;
+  line-height: 1.5;
+  margin: 5px 0 6px;
+  font-weight: 600;
+}
+.sim-product-list small {
+  font-size: 9px;
+  color: #626b7a;
+  display: block;
+  line-height: 1.8;
+}
+.sim-product-list p {
+  font-size: 12px;
+  color: #626b7a;
+  line-height: 1.7;
+  margin: 0 0 8px;
+}
+.sim-product-list span {
+  font-size: 12px;
+  color: #0b0b0d;
+}
+.sim-payment-card > h3 {
+  font-size: 15px;
+  line-height: 1.5;
+  margin-bottom: 22px;
+  font-weight: 600;
+}
+.sim-payment-card {
+  margin-bottom: 24px;
+  max-width: 680px;
+}
+.sim-payment-card dd {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.sim-security-alert {
+  background: #f8faff;
+  border: 1px solid #dce9ff;
+  padding: 16px;
+  border-radius: 11px;
+  margin-top: 20px;
+  line-height: 1.7;
+  font-size: 12px;
+}
+.sim-security-alert > strong {
+  font-weight: 600;
+}
+.sim-security-alert > p {
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.sim-security-alert > small {
+  display: block;
+  font-size: 9px;
+  color: #626b7a;
+  overflow-wrap: anywhere;
+  margin: 15px 0;
+}
+.sim-security-alert > .cb-secondary {
+  font-size: 11px;
+}
+.sim-reference {
+  font-size: 10px;
+  color: #626b7a;
+  margin: 18px 0;
+  line-height: 1.9;
+}
+.sim-reference code {
+  font:
+    10px/1.8 Inter,
+    sans-serif;
+  overflow-wrap: anywhere;
+  color: #0b0b0d;
+}
+.sim-inspector {
+  border-top: 1px solid #e5e9f0;
+  margin-top: 22px;
+  font-size: 11px;
+}
+.sim-inspector > summary {
+  padding-top: 16px;
+  color: #626b7a;
+  cursor: pointer;
+  line-height: 1.6;
+}
+.sim-inspector-body {
+  padding-top: 16px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.sim-inspector h3 {
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 21px 0 10px;
+  font-weight: 600;
+}
+.sim-inspector h4 {
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 16px 0 8px;
+}
+.sim-inspector details > summary {
+  cursor: pointer;
+  line-height: 1.7;
+  padding: 9px 0;
+  color: #475366;
+}
+.sim-page pre,
+.sim-inspector pre,
+.sim-delivery pre {
+  font:
+    10px/1.8 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border: 1px solid #e5e9f0;
+  border-radius: 8px;
+  background: #fafbfd;
+  padding: 13px;
+  max-height: 480px;
+  overflow: auto;
+  margin: 8px 0 15px;
+  max-width: 100%;
+  min-width: 0;
+}
+.sim-warning {
+  font-size: 11px;
+  padding: 12px;
+  border: 1px solid #dce9ff;
+  border-radius: 10px;
+  color: #0866ff;
+  background: #f7faff;
+  line-height: 1.8;
+}
+.sim-rule {
+  border-bottom: 1px solid #e5e9f0;
+  padding: 10px 0;
+}
+.sim-rule strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+.sim-rule p {
+  font-size: 11px;
+  color: #626b7a;
+  line-height: 1.7;
+  margin: 7px 0;
+}
+.sim-timeline {
+  padding-left: 20px;
+  list-style: none;
+  border-left: 1px solid #dce9ff;
+  margin-left: 5px;
+}
+.sim-timeline li {
+  position: relative;
+  padding: 9px 0 17px 4px;
+}
+.sim-timeline li:before {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #0866ff;
+  left: -23px;
+  top: 14px;
+}
+.sim-timeline small {
+  display: block;
+  color: #626b7a;
+  font-size: 9px;
+  line-height: 1.9;
+}
+.sim-timeline strong {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.7;
+  letter-spacing: 0.1px;
+}
+.sim-timeline summary {
+  font-size: 10px;
+}
+.sim-lab-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 25px;
+  border-bottom: 1px solid #e5e9f0;
+  padding-bottom: 13px;
+}
+.sim-lab-tabs button {
+  font-size: 11px;
+  color: #626b7a;
+  border-radius: 8px;
+  padding: 9px 11px;
+  min-height: 34px;
+}
+.sim-lab-tabs button[aria-selected="true"] {
+  background: #eaf2ff;
+  color: #0866ff;
+}
+.sim-lab-tabs button:hover {
+  background: #f6f8fb;
+}
+.sim-scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 22px;
+}
+.sim-scenario-grid > button {
+  border: 1px solid #e5e9f0;
+  text-align: left;
+  padding: 20px;
+  border-radius: 12px;
+  transition: border-color 0.15s;
+  background: white;
+}
+.sim-scenario-grid > button:hover {
+  border-color: #a9caff;
+  background: #fafcff;
+}
+.sim-scenario-grid > button > svg {
+  color: #0866ff;
+  margin-bottom: 14px;
+}
+.sim-scenario-grid strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 9px;
+}
+.sim-scenario-grid p {
+  font-size: 11px;
+  color: #626b7a;
+  line-height: 1.7;
+  margin: 0 0 12px;
+}
+.sim-scenario-grid small {
+  font-size: 8px;
+  letter-spacing: 0.4px;
+  color: #626b7a;
+}
+.sim-builder {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 25px;
+}
+.sim-builder label,
+.sim-exchange-form label,
+.sim-environment-picker label {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.6;
+  min-width: 0;
+}
+.sim-builder input,
+.sim-builder select,
+.sim-builder textarea,
+.sim-exchange-form input,
+.sim-environment-picker select,
+.sim-control-row input,
+.sim-page > .cb-panel > select {
+  width: 100%;
+  min-width: 0;
+  font:
+    12px/1.6 Inter,
+    sans-serif;
+  border: 1px solid #e5e9f0;
+  background: white;
+  color: #0b0b0d;
+  border-radius: 9px;
+  padding: 11px 12px;
+  max-width: 100%;
+}
+.sim-builder input[readonly] {
+  background: #f8f9fb;
+  font-size: 10px;
+  color: #626b7a;
+}
+.sim-builder textarea {
+  resize: vertical;
+}
+.sim-full-width {
+  grid-column: 1/-1;
+}
+.sim-builder-description {
+  padding: 15px;
+  background: #fafbfd;
+  border: 1px solid #e5e9f0;
+  border-radius: 10px;
+}
+.sim-builder-description strong {
+  font-size: 11px;
+  font-weight: 500;
+}
+.sim-builder-description p {
+  font-size: 11px;
+  color: #626b7a;
+  line-height: 1.7;
+  margin: 10px 0;
+}
+.sim-builder-description small {
+  font-size: 9px;
+  line-height: 1.9;
+  color: #626b7a;
+}
+.sim-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 15px 0;
+}
+.sim-control-row form {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+.sim-control-row form input {
+  flex: 1;
+  min-width: 160px;
+}
+.sim-armed-row {
+  padding: 19px 0;
+  border-bottom: 1px solid #e5e9f0;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+.sim-armed-row:last-child {
+  border: 0;
+  padding-bottom: 0;
+}
+.sim-armed-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.sim-armed-row h3 {
+  margin: 10px 0 6px;
+  font-size: 13px;
+}
+.sim-armed-row small {
+  display: block;
+  color: #626b7a;
+  font-size: 10px;
+  line-height: 1.8;
+}
+.sim-armed-row code {
+  font:
+    9px/1.8 Inter,
+    sans-serif;
+  color: #626b7a;
+  overflow-wrap: anywhere;
+  display: block;
+  margin-top: 5px;
+}
+.sim-armed-row > details {
+  width: 100%;
+  min-width: 0;
+}
+.sim-armed-row summary {
+  font-size: 11px;
+  cursor: pointer;
+}
+.sim-payload-diff {
+  margin: 24px 0;
+}
+.sim-payload-diff h3 {
+  font-size: 12px;
+  font-weight: 500;
+}
+.sim-payload-diff .cb-table-scroll {
+  border: 1px solid #e5e9f0;
+  border-radius: 10px;
+}
+.sim-payload-diff table {
+  white-space: normal;
+  table-layout: fixed;
+  width: 100%;
+}
+.sim-payload-diff th:first-child,
+.sim-payload-diff td:first-child {
+  width: 18%;
+}
+.sim-payload-diff td {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  vertical-align: top;
+  padding: 12px;
+}
+.sim-payload-diff th {
+  padding: 12px;
+}
+.sim-payload-diff .sim-changed td {
+  background: #f1f6ff;
+}
+.sim-payload-diff .sim-changed td:first-child {
+  color: #0866ff;
+  font-weight: 500;
+}
+.sim-run-summary {
+  margin: 20px 0;
+}
+.sim-run-summary .cb-details > div {
+  font-size: 11px;
+}
+.sim-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #e5e9f0;
+  border: 1px solid #e5e9f0;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 23px;
+}
+.sim-metrics > div {
+  background: white;
+  padding: 20px 16px;
+}
+.sim-metrics small {
+  display: block;
+  font-size: 10px;
+  color: #626b7a;
+  line-height: 1.7;
+}
+.sim-metrics strong {
+  display: block;
+  font-weight: 500;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+  margin-top: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.sim-run-row {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  text-align: left;
+  width: 100%;
+  padding: 19px 0;
+  border-bottom: 1px solid #e5e9f0;
+  font-size: 12px;
+}
+.sim-run-row:last-child {
+  border: 0;
+}
+.sim-run-row > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.sim-run-row strong {
+  display: block;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+.sim-run-row small {
+  display: block;
+  font-size: 9px;
+  color: #626b7a;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+}
+.sim-run-row > svg {
+  color: #0866ff;
+  flex-shrink: 0;
+}
+.sim-replay-result {
+  font-size: 11px;
+  color: #0866ff;
+  border: 1px solid #dce9ff;
+  padding: 15px;
+  border-radius: 10px;
+  line-height: 1.8;
+}
+.sim-replay-result code {
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.sim-wallet-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+  margin-top: 23px;
+}
+.sim-wallet-grid article {
+  border: 1px solid #e5e9f0;
+  border-radius: 11px;
+  padding: 20px;
+}
+.sim-wallet-grid article > svg {
+  color: #0866ff;
+  margin-bottom: 15px;
+}
+.sim-wallet-grid h3 {
+  text-transform: capitalize;
+  font-weight: 500;
+  font-size: 13px;
+}
+.sim-wallet-grid strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 500;
+  margin: 14px 0 8px;
+}
+.sim-wallet-grid small {
+  display: block;
+  color: #626b7a;
+  font-size: 10px;
+  line-height: 1.8;
+}
+.sim-wallet-grid code {
+  font:
+    9px/1.8 Inter,
+    sans-serif;
+  display: block;
+  overflow-wrap: anywhere;
+  margin: 14px 0;
+}
+.sim-snapshot-row {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  justify-content: space-between;
+  border-bottom: 1px solid #e5e9f0;
+  padding: 18px 0;
+  font-size: 12px;
+}
+.sim-snapshot-row small {
+  display: block;
+  margin-top: 7px;
+  font-size: 9px;
+  color: #626b7a;
+}
+.sim-environment-picker {
+  margin-bottom: 24px;
+}
+.sim-environment-picker select {
+  margin-top: 3px;
+}
+.sim-graph-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.sim-fund-graph {
+  min-width: 500px;
+  width: 100%;
+  max-height: 280px;
+  display: block;
+}
+.sim-node-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.sim-node-filters button {
+  border: 1px solid #e5e9f0;
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 10px;
+}
+.sim-node-filters button.active {
+  border-color: #b5d2ff;
+  color: #0866ff;
+  background: #eaf2ff;
+}
+.sim-flow-row {
+  padding: 16px 0;
+  border-bottom: 1px solid #e5e9f0;
+  line-height: 1.8;
+}
+.sim-flow-row strong {
+  font-size: 12px;
+  font-weight: 500;
+  display: block;
+}
+.sim-flow-row span {
+  display: block;
+  font-size: 11px;
+  color: #626b7a;
+}
+.sim-flow-row small {
+  display: block;
+  font-size: 9px;
+  color: #626b7a;
+  overflow-wrap: anywhere;
+  margin-top: 7px;
+}
+.sim-incident-title {
+  margin-top: 18px;
+  text-transform: capitalize;
+}
+.sim-exchange-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin-top: 23px;
+}
+.sim-exchange-form button {
+  align-self: flex-start;
+}
+.sim-page .cb-panel > .cb-panel {
+  border: 0;
+  padding-left: 0;
+  padding-right: 0;
+  margin-top: 22px;
+}
+.sim-page .cb-panel .cb-table-scroll pre {
+  white-space: pre-wrap;
+  min-width: 240px;
+}
+.sim-page details {
+  font-size: 11px;
+  line-height: 1.8;
+}
+.sim-page summary {
+  cursor: pointer;
+}
+.sim-delivery {
+  margin-top: 20px;
+}
+.sim-page .cb-panel pre {
+  white-space: pre-wrap;
+}
+.sim-page > .cb-panel > select {
+  max-width: 450px;
+}
+.sim-page .sim-reference code {
+  max-width: 100%;
+}
+@media (max-width: 650px) {
+  .sim-global-banner {
+    font-size: 8px;
+    line-height: 1.7;
+    padding: 7px 15px;
+  }
+  .sim-product-list > article {
+    padding: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .sim-product-list > article > div:nth-child(2) {
+    flex-basis: calc(100% - 60px);
+  }
+  .sim-product-list > article > .cb-secondary {
+    margin-left: auto;
+  }
+  .sim-product-list p {
+    font-size: 11px;
+  }
+  .sim-product-list h2 {
+    font-size: 13px;
+  }
+  .sim-builder {
+    grid-template-columns: 1fr;
+    gap: 17px;
+  }
+  .sim-scenario-grid {
+    grid-template-columns: 1fr;
+  }
+  .sim-lab-tabs {
+    gap: 4px;
+  }
+  .sim-lab-tabs button {
+    font-size: 10px;
+    padding: 8px;
+  }
+  .sim-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .sim-metrics strong {
+    font-size: 17px;
+  }
+  .sim-metrics > div {
+    padding: 16px 13px;
+  }
+  .sim-wallet-grid {
+    grid-template-columns: 1fr;
+  }
+  .sim-run-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .sim-run-row > .cb-status {
+    max-width: 150px;
+    white-space: normal;
+  }
+  .sim-control-row > .cb-primary,
+  .sim-control-row > .cb-secondary {
+    flex: 1;
+  }
+  .sim-control-row form > .cb-primary {
+    width: 100%;
+  }
+  .sim-payload-diff th,
+  .sim-payload-diff td {
+    padding: 9px 7px;
+    font-size: 9px;
+  }
+  .sim-builder input,
+  .sim-builder select,
+  .sim-builder textarea,
+  .sim-exchange-form input,
+  .sim-environment-picker select,
+  .sim-control-row input {
+    font-size: 16px;
+  }
+  .sim-payment-card dl > div {
+    font-size: 10px;
+    gap: 12px;
+  }
+  .sim-payment-card .cb-address {
+    font-size: 9px;
+  }
+  .sim-security-alert {
+    padding: 13px;
+  }
+  .sim-warning {
+    font-size: 10px;
+  }
+  .sim-inspector pre {
+    font-size: 9px;
+  }
+  .sim-run-summary .cb-details > div {
+    font-size: 10px;
+  }
+  .sim-mode-badge {
+    font-size: 8px;
+  }
+  .sim-graph-scroll {
+    margin-left: -5px;
+    margin-right: -5px;
+  }
+}
+.sim-external-panel {
+  padding: 14px;
+  border: 1px solid #e5e9f0;
+  border-radius: 10px;
+  margin: 16px 0;
+  font-size: 11px;
+}
+.sim-external-panel summary {
+  cursor: pointer;
+}
+.sim-external-panel > p {
+  margin-top: 13px;
+}
+.sim-external-panel > label {
+  display: block;
+  line-height: 1.7;
+  margin-bottom: 14px;
+}
+.sim-external-panel select {
+  display: block;
+  border: 1px solid #e5e9f0;
+  border-radius: 8px;
+  background: white;
+  font-size: 11px;
+  padding: 10px;
+  width: 100%;
+  margin-top: 8px;
+}
+.sim-external-panel label.sim-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sim-checkbox > input {
+  margin: 0;
+}
+.sim-global-banner ~ .cb-chat-main .cb-chat {
+  min-height: calc(100dvh - 176px);
+}
+@media (max-width: 1250px) {
+  .sim-global-banner ~ .cb-chat-main .cb-chat {
+    min-height: calc(100dvh - 159px);
+  }
+}
+@media (max-height: 820px) and (min-width: 901px) {
+  .sim-global-banner ~ .cb-chat-main .cb-chat {
+    min-height: calc(100dvh - 150px);
+  }
+}
+@media (max-width: 900px) {
+  .sim-global-banner ~ .cb-chat-main .cb-chat {
+    min-height: calc(100dvh - 152px);
+  }
+}
+@media (max-width: 650px) {
+  .sim-global-banner ~ .cb-chat-main .cb-chat {
+    min-height: calc(100dvh - 160px);
+  }
+}

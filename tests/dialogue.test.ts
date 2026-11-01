@@ -1,0 +1,7 @@
+import {it,expect,vi,afterEach} from 'vitest';
+vi.mock('../server/outbound',()=>({postPublicJson:vi.fn()}));
+import {postPublicJson} from '../server/outbound';import {interpretDialogue} from '../server/chat/dialogue';
+afterEach(()=>{delete process.env.DIALOGUE_ADAPTER_URL;vi.clearAllMocks()});
+it('uses the deterministic assistant without any model configuration',async()=>{expect(await interpretDialogue('hello',[],[])).toBeNull();expect(postPublicJson).not.toHaveBeenCalled()});
+it('accepts only catalog-scoped model interpretation hints',async()=>{process.env.DIALOGUE_ADAPTER_URL='https://model.example/intent';vi.mocked(postPublicJson).mockResolvedValue({intent:'purchase',resourceId:'report',budget:'1'});expect(await interpretDialogue('a report please',[{id:'report',name:'Research report',price:'1000000'}],[])).toEqual({intent:'purchase',resourceId:'report',budget:'1'})});
+it('models have no approval or recipient-setting authority',async()=>{process.env.DIALOGUE_ADAPTER_URL='https://model.example/intent';vi.mocked(postPublicJson).mockResolvedValue({intent:'approve',recipient:'0xattacker'});await expect(interpretDialogue('buy a report',[],[])).rejects.toBeTruthy();vi.mocked(postPublicJson).mockResolvedValue({intent:'purchase',resourceId:'unknown',budget:'1'});await expect(interpretDialogue('buy a report',[{id:'report',name:'Report',price:'1000000'}],[])).rejects.toThrow('unknown catalog resource')});
